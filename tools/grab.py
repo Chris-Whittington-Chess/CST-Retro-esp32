@@ -26,7 +26,7 @@ for cmd in a.cmds:
     s.write((cmd + "\n").encode())
     time.sleep(0.3)
     print(s.read(s.in_waiting).decode(errors="replace").strip())
-s.write(b"d")
+s.write(b"d\n")
 buf = b""
 while b"FRAME\n" not in buf:
     chunk = s.read(64)

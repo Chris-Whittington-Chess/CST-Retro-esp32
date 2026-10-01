@@ -10,18 +10,26 @@
 // runs in loop() on core 1. The engine searches a copy of the game board and
 // hands back a move.
 //
-// Serial (115200): 'd' dump frame ("FRAME\n" + 320*240 LE RGB565, see
-// tools/grab.py), 't X Y' simulated tap, 'n' new game as White,
-// 'a' autoplay (the engine also plays your side until the game ends, moves
-// printed), 'b' perft bench, 's' search bench (both only while it's your move).
+// USB serial (115200), one command per line:
+//   UCI: "uci" switches to UCI mode - the device is then a UCI engine (for a
+//   GUI or cutechess via tools/uci_bridge.py) and the screen follows the game;
+//   the menu's "Play from here" returns to touch play. "position ..." outside
+//   UCI mode sets up the touch game with you to move. Also isready,
+//   ucinewgame, go, stop, setoption name OwnBook, quit (= leave UCI mode).
+//   Debug: "d" dump frame ("FRAME\n" + 320*240 LE RGB565, tools/grab.py),
+//   "t X Y" simulated tap, "n" new game as White, "a" autoplay (the engine
+//   also plays your side, moves printed), "b" perft bench, "s" search bench,
+//   "touchlog" toggles printing every touch.
 #include <M5Unified.h>
 #include <Preferences.h>
+#include "usb_out.h"
 #include "../engine/bench.h"
 #include "../engine/board.h"
 #include "../engine/book.h"
 #include "../engine/eval.h"
 #include "../engine/search.h"
 #include "../engine/tt.h"
+#include "../engine/uci_util.h"
 #include "pieces.h"
 
 extern const uint8_t book_start[] asm("_binary_data_Jeroen_bin_start");
@@ -70,13 +78,15 @@ static bool timed() { return TCS[tc_game].move_ms == 0; }
 
 // ---------------------------------------------------------------- game state
 
-enum Phase { HUMAN, ENGINE, OVER };
+// UCI: driven over USB (the board shows the game, touch moves are off).
+enum Phase { HUMAN, ENGINE, OVER, UCI };
 static Board game;
 static int human = ::WHITE;
 static bool flipped = false;
 static Phase phase = HUMAN;
 static int32_t clock_ms[2];
 static int32_t clock_hist[MAX_GAME][2];  // clocks at the start of each ply
+static int start_ply;                    // take back stops here (set-up positions)
 static u32 turn_start;
 static char result[2][24];  // two lines
 static Move last_move;
@@ -90,6 +100,8 @@ static bool autoplay;      // serial 'a': the engine plays both sides
 static bool use_book = true;
 static bool last_from_book;
 static u32 book_move_at;  // a book move is shown after a short pause
+static bool uci_own_book;  // UCI option OwnBook (off: GUIs/matches bring their own)
+static bool touch_log;
 
 // ---------------------------------------------------------------- engine task
 
@@ -101,12 +113,30 @@ static volatile int eng_command;  // 'g' search, 'b' perft bench, 's' search ben
 static volatile bool eng_busy, eng_done;
 static volatile Move eng_move;
 static volatile int info_depth, info_score;
+static volatile bool eng_uci;  // the running search answers a UCI "go"
+
+// UCI info lines from the engine task, printed by loop() so that all serial
+// output comes from one task (single producer / single consumer ring).
+enum { INFO_SLOTS = 8, INFO_LEN = 400 };
+static char info_ring[INFO_SLOTS][INFO_LEN];
+static volatile u32 info_head, info_tail;
 
 u32 engine_now_ms() { return millis(); }
 
 static void on_report(const SearchReport& r) {
   info_depth = r.depth;
   info_score = r.score;
+  if (eng_uci && info_head - info_tail < INFO_SLOTS) {
+    uci_info(r, info_ring[info_head % INFO_SLOTS], INFO_LEN);
+    info_head = info_head + 1;
+  }
+}
+
+static void flush_info() {
+  while (info_tail != info_head) {
+    usb_println(info_ring[info_tail % INFO_SLOTS]);
+    info_tail = info_tail + 1;
+  }
 }
 
 static void engine_loop(void*) {
@@ -122,13 +152,13 @@ static void engine_loop(void*) {
       u32 t0 = millis();
       BenchResult r = run_bench(eng_board);
       u32 ms = millis() - t0;
-      Serial.printf("perft bench %llu nodes, %d fail, %u ms, %llu knps\n", r.nodes, r.failures,
+      usb_printf("perft bench %llu nodes, %d fail, %u ms, %llu knps\n", r.nodes, r.failures,
                     unsigned(ms), r.nodes / (ms ? ms : 1));
     } else if (c == 's') {
       u32 t0 = millis();
       u64 n = run_search_bench(eng_board, 8);
       u32 ms = millis() - t0;
-      Serial.printf("search bench d8: %llu nodes, %u ms, %llu knps, engine stack free %u\n", n,
+      usb_printf("search bench d8: %llu nodes, %u ms, %llu knps, engine stack free %u\n", n,
                     unsigned(ms), n / (ms ? ms : 1), unsigned(uxTaskGetStackHighWaterMark(nullptr)));
       search_new_game();
     }
@@ -168,24 +198,12 @@ static void start_engine() {
   }
   last_from_book = false;
   memcpy(&eng_board, &game, sizeof game);
-  Limits lim;
   const TimeControl& tc = TCS[tc_game];
-  if (tc.move_ms) {
-    lim.soft_ms = lim.hard_ms = tc.move_ms;
-  } else {
-    // Same scheme as the PC test build: ~1/25 of the clock plus most of the
-    // increment, never more than half of what is left.
-    int32_t left = clock_ms[game.stm] - 50;
-    if (left < 1) left = 1;
-    int32_t inc = int32_t(tc.inc_ms);
-    int32_t soft = left / 25 + inc * 3 / 4;
-    int32_t hard = soft * 4;
-    if (hard > left / 2 + inc / 2) hard = left / 2 + inc / 2;
-    if (soft > hard) soft = hard;
-    lim.soft_ms = u32(soft > 1 ? soft : 1);
-    lim.hard_ms = u32(hard > 1 ? hard : 1);
-  }
+  Limits lim;
+  if (tc.move_ms) lim.soft_ms = lim.hard_ms = tc.move_ms;
+  else lim = clock_limits(clock_ms[game.stm], int32_t(tc.inc_ms), 0, 50);  // same as UCI
   eng_limits = lim;
+  eng_uci = false;
   engine_command('g');
 }
 
@@ -228,8 +246,8 @@ static void play(Move m, bool engine = false) {
   if (autoplay) {
     char mv[6];
     move_to_uci(m, mv);
-    if (game.stm == ::WHITE) Serial.printf("%d. ", game.hply / 2 + 1);
-    Serial.printf("%s ", mv);
+    if (game.stm == ::WHITE) usb_printf("%d. ", game.hply / 2 + 1);
+    usb_printf("%s ", mv);
   }
   game.make(m);
   last_move = m;
@@ -244,7 +262,7 @@ static void play(Move m, bool engine = false) {
     else start_engine();
   } else if (autoplay) {
     autoplay = false;
-    Serial.printf("\nresult: %s, %s (%d plies)\n", result[0], result[1], game.hply);
+    usb_printf("\nresult: %s, %s (%d plies)\n", result[0], result[1], game.hply);
   }
   dirty = true;
 }
@@ -257,6 +275,7 @@ static void new_game(int color) {
   human = color;
   flipped = color == ::BLACK;
   clock_ms[0] = clock_ms[1] = int32_t(TCS[tc_game].base_ms);
+  start_ply = 0;
   last_move = 0;
   selected = -1;
   nsel = 0;
@@ -267,13 +286,37 @@ static void new_game(int color) {
   dirty = true;
 }
 
+// Touch play from the current position, you to move (after UCI or a
+// "position" command from the PC).
+static void play_from_here() {
+  stop_engine();
+  autoplay = false;
+  tc_game = tc_index;
+  human = game.stm;
+  flipped = human == ::BLACK;
+  clock_ms[0] = clock_ms[1] = int32_t(TCS[tc_game].base_ms);
+  last_move = game.hply ? game.hist[game.hply - 1].move : 0;
+  last_from_book = false;
+  selected = -1;
+  nsel = 0;
+  promo_from = -1;
+  turn_start = millis();
+  start_ply = game.hply;
+  clock_hist[start_ply][0] = clock_ms[0];
+  clock_hist[start_ply][1] = clock_ms[1];
+  phase = HUMAN;
+  check_game_over();
+  dirty = true;
+}
+
 // Undo back to the most recent position with the human to move.
 static void take_back() {
+  if (phase == UCI) return;
   autoplay = false;
   stop_engine();
-  if (!game.hply) return;
+  if (game.hply <= start_ply) return;
   do game.unmake();
-  while (game.hply && game.stm != human);
+  while (game.hply > start_ply && game.stm != human);
   clock_ms[0] = clock_hist[game.hply][0];
   clock_ms[1] = clock_hist[game.hply][1];
   last_move = game.hply ? game.hist[game.hply - 1].move : 0;
@@ -356,7 +399,8 @@ static void fmt_clock(int32_t ms, char* out) {
 
 static int32_t clock_now(int side) {
   int32_t ms = clock_ms[side];
-  if (phase != OVER && game.stm == side && game.hply) ms -= int32_t(millis() - turn_start);
+  if ((phase == HUMAN || phase == ENGINE) && game.stm == side && game.hply)
+    ms -= int32_t(millis() - turn_start);
   return ms;
 }
 
@@ -367,7 +411,8 @@ static void draw_clock(int side, int y) {
   frame.fillCircle(PANEL_X + 11, y + CLOCK_H / 2, 4, side == ::WHITE ? TFT_WHITE : TFT_BLACK);
   frame.drawCircle(PANEL_X + 11, y + CLOCK_H / 2, 4, DIM);
   char buf[12];
-  if (timed()) fmt_clock(clock_now(side), buf);
+  if (phase == UCI) snprintf(buf, sizeof buf, "%s", side == ::WHITE ? "White" : "Black");
+  else if (timed()) fmt_clock(clock_now(side), buf);
   else snprintf(buf, sizeof buf, "%s", side == human ? "You" : "CST");
   frame.setFont(&fonts::FreeSansBold9pt7b);
   frame.setTextColor(active ? TFT_BLACK : TEXT);
@@ -413,7 +458,16 @@ static void draw_status() {
     }
     return;
   }
-  if (phase == OVER) {
+  if (phase == UCI) {
+    line(ACTIVE, "UCI via USB");
+    line(TEXT, eng_busy ? "Thinking..." : "Waiting");
+    if (eng_busy && info_depth) {
+      snprintf(buf, sizeof buf, "depth %d", info_depth);
+      line(DIM, buf);
+      fmt_score(game.stm == ::WHITE ? info_score : -info_score, buf);
+      line(DIM, buf);
+    }
+  } else if (phase == OVER) {
     line(ACTIVE, result[0]);
     line(ACTIVE, result[1]);
   } else if (phase == ENGINE) {
@@ -434,7 +488,7 @@ static void draw_status() {
     snprintf(buf, sizeof buf, "%s %s", last_from_book ? "book" : "last", mv);
     line(DIM, buf);
   }
-  line(DIM, TCS[tc_game].name);
+  if (phase != UCI) line(DIM, TCS[tc_game].name);
 }
 
 static void draw_panel() {
@@ -452,7 +506,9 @@ enum { MENU_X = 20, MENU_W = 280, MENU_Y0 = 30, MENU_H = 30, MENU_GAP = 5, MENU_
 
 static void menu_label(int i, char* out) {
   switch (i) {
-    case 0: snprintf(out, 48, "New game - play White"); break;
+    case 0:
+      snprintf(out, 48, phase == UCI ? "Leave UCI - play from here" : "New game - play White");
+      break;
     case 1: snprintf(out, 48, "New game - play Black"); break;
     case 2:
       snprintf(out, 48, "Time: %s%s", TCS[tc_index].name, tc_index != tc_game ? " (next game)" : "");
@@ -503,7 +559,11 @@ static void tap_menu(int x, int y) {
   int i = (y - MENU_Y0) / (MENU_H + MENU_GAP);
   if (i >= MENU_ITEMS || (y - MENU_Y0) % (MENU_H + MENU_GAP) >= MENU_H) return;
   switch (i) {
-    case 0: menu_open = false; new_game(::WHITE); break;
+    case 0:
+      menu_open = false;
+      if (phase == UCI) play_from_here();
+      else new_game(::WHITE);
+      break;
     case 1: menu_open = false; new_game(::BLACK); break;
     case 2:
       tc_index = (tc_index + 1) % NUM_TCS;
@@ -642,45 +702,149 @@ static void tap(int x, int y) {
 // ---------------------------------------------------------------- serial
 
 static void dump_frame() {
-  Serial.print("FRAME\n");
+  usb_print("FRAME\n");
   static uint16_t line[SCREEN_W];
   for (int y = 0; y < SCREEN_H; y++) {
     for (int x = 0; x < SCREEN_W; x++) line[x] = frame.readPixel(x, y);
-    Serial.write((uint8_t*)line, sizeof line);
+    usb_write((uint8_t*)line, sizeof line);
   }
-  Serial.flush();
+  // A trailer line marks the end of the frame for tools/grab.py-style readers
+  // (they read exactly the frame size and ignore it).
+  usb_print("\nEND FRAME\n");
+}
+
+// ---- UCI over USB ----
+
+// All output goes through usb_out (not Serial.print), see usb_out.cpp.
+static void uci_send(const char* fmt, ...) {
+  char line[96];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(line, sizeof line, fmt, ap);
+  va_end(ap);
+  usb_println(line);
+}
+
+static void enter_uci() {
+  stop_engine();
+  autoplay = false;
+  menu_open = false;
+  selected = -1;
+  nsel = 0;
+  promo_from = -1;
+  phase = UCI;
+  dirty = true;
+}
+
+static void uci_go_cmd(const char* line) {
+  if (phase != UCI) enter_uci();
+  stop_engine();
+  if (uci_own_book) {
+    Move m = book_pick(game, book_start, size_t(book_end - book_start), esp_random());
+    if (m) {
+      char mv[6];
+      move_to_uci(m, mv);
+      uci_send("bestmove %s", mv);
+      return;
+    }
+  }
+  memcpy(&eng_board, &game, sizeof game);
+  eng_limits = uci_go(line, game.stm, 100);  // USB + bridge + screen ~50 ms per move
+  eng_uci = true;
+  info_depth = 0;
+  engine_command('g');
+  dirty = true;
+}
+
+// The engine answered a UCI "go": report it and show the move on the board
+// (the GUI's next "position" replaces the board anyway).
+static void uci_done() {
+  flush_info();
+  Move m = eng_move;
+  char mv[6] = "0000";
+  if (m) move_to_uci(m, mv);
+  uci_send("bestmove %s", mv);
+  eng_uci = false;
+  if (m && game.hply < MAX_GAME - MAX_PLY - 2) {
+    game.make(m);
+    last_move = m;
+    beep();
+  }
+  dirty = true;
+}
+
+static void uci_position_cmd(const char* args) {
+  stop_engine();
+  if (!uci_position(game, args)) uci_send("info string bad position or move");
+  last_move = game.hply ? game.hist[game.hply - 1].move : 0;
+  last_from_book = false;
+  if (phase == UCI) {
+    selected = -1;
+    nsel = 0;
+    dirty = true;
+  } else {
+    play_from_here();  // set up from the PC, then play it by touch
+  }
+}
+
+static void serial_line(char* line) {
+  if (!strcmp(line, "uci")) {
+    enter_uci();
+    usb_println("id name CST Retro (ESP32)");
+    usb_println("id author Chris Whittington");
+    usb_println("option name OwnBook type check default false");
+    uci_send("uciok");
+  } else if (!strcmp(line, "isready")) {
+    uci_send("readyok");
+  } else if (!strcmp(line, "ucinewgame")) {
+    stop_engine();
+    search_new_game();
+  } else if (!strncmp(line, "setoption name OwnBook value ", 29)) {
+    uci_own_book = !strcmp(line + 29, "true");
+  } else if (!strncmp(line, "position ", 9)) {
+    uci_position_cmd(line + 9);
+  } else if (!strncmp(line, "go", 2) && (line[2] == 0 || line[2] == ' ')) {
+    uci_go_cmd(line);
+  } else if (!strcmp(line, "stop")) {
+    if (eng_uci) search_stop = true;  // the search ends and answers bestmove
+  } else if (!strcmp(line, "quit")) {
+    if (phase == UCI) play_from_here();
+  } else if (!strcmp(line, "d")) {
+    dump_frame();
+  } else if (line[0] == 't' && line[1] == ' ') {
+    int x, y;
+    if (sscanf(line + 2, "%d %d", &x, &y) == 2) tap(x, y);
+  } else if (!strcmp(line, "n")) {
+    autoplay = false;
+    new_game(::WHITE);
+  } else if (!strcmp(line, "a") && phase == HUMAN) {
+    autoplay = true;
+    usb_println("autoplay:");
+    start_engine();
+  } else if ((!strcmp(line, "b") || !strcmp(line, "s")) && phase != ENGINE && !eng_busy) {
+    memcpy(&eng_board, &game, sizeof game);
+    engine_command(line[0]);
+  } else if (!strcmp(line, "touchlog")) {
+    touch_log = !touch_log;
+    usb_printf("touch log %s\n", touch_log ? "on" : "off");
+  }
 }
 
 static void serial_command() {
-  static char buf[32];
+  static char buf[8192];  // "position startpos moves ..." can be long
   static int n = 0;
   while (Serial.available()) {
     int c = Serial.read();
     if (c == '\r') continue;
-    if (c != '\n' && n < 31) {
-      buf[n++] = char(c);
-      if (n == 1 && c == 'd') {
-        dump_frame();
-        n = 0;
-      }
+    if (c != '\n') {
+      if (n < int(sizeof buf) - 1) buf[n++] = char(c);
       continue;
     }
     buf[n] = 0;
     n = 0;
-    if (buf[0] == 't') {
-      int x, y;
-      if (sscanf(buf + 1, "%d %d", &x, &y) == 2) tap(x, y);
-    } else if (buf[0] == 'n') {
-      autoplay = false;
-      new_game(::WHITE);
-    } else if (buf[0] == 'a' && phase == HUMAN) {
-      autoplay = true;
-      Serial.println("autoplay:");
-      start_engine();
-    } else if ((buf[0] == 'b' || buf[0] == 's') && phase != ENGINE && !eng_busy) {
-      memcpy(&eng_board, &game, sizeof game);
-      engine_command(buf[0]);
-    }
+    char* line = buf;
+    while (*line == ' ') line++;
+    serial_line(line);
   }
 }
 
@@ -689,7 +853,11 @@ static void serial_command() {
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
-  Serial.begin(115200);
+  // The default 256-byte receive buffer overflowed on long UCI "position ...
+  // moves" lines arriving while the screen redraws (bytes lost, newline too).
+  Serial.setRxBufferSize(16384);
+  Serial.begin(115200);  // input only; output goes through usb_out
+  usb_out_begin();
   M5.Speaker.setVolume(80);
   frame.setPsram(true);
   frame.setColorDepth(16);
@@ -705,7 +873,7 @@ void setup() {
   if (tc_index < 0 || tc_index >= NUM_TCS) tc_index = DEFAULT_TC;
   use_book = prefs.getBool("book", true);
   new_game(::WHITE);
-  Serial.printf("CST Retro ready, internal free %u KB\n",
+  usb_printf("CST Retro ready, internal free %u KB\n",
                 unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 }
 
@@ -719,24 +887,28 @@ void loop() {
   serial_command();
 
   auto t = M5.Touch.getDetail();
-  if (t.wasPressed() || t.wasReleased()) {
+  if (touch_log && (t.wasPressed() || t.wasReleased())) {
     int s = square_at(t.x, t.y);
     char name[3] = "--";
     if (s >= 0) { name[0] = char('a' + sq_file(s)); name[1] = char('1' + sq_rank(s)); }
-    Serial.printf("touch %s x=%d y=%d sq=%s (slowest loop %u ms)\n",
+    usb_printf("touch %s x=%d y=%d sq=%s (slowest loop %u ms)\n",
                   t.wasPressed() ? "down" : "up  ", t.x, t.y, name, unsigned(loop_max_ms));
     loop_max_ms = 0;
   }
   if (t.wasPressed()) tap(t.x, t.y);
   if (t.wasReleased()) release_board(t.x, t.y);
 
-  if (eng_done && (!last_from_book || int32_t(millis() - book_move_at) >= 0)) {
+  flush_info();
+  if (eng_done && phase == UCI) {
+    eng_done = false;
+    if (eng_uci) uci_done();
+  } else if (eng_done && (!last_from_book || int32_t(millis() - book_move_at) >= 0)) {
     eng_done = false;
     if (phase == ENGINE && eng_move) play(eng_move, true);
   }
 
   // flag fall
-  if (phase != OVER && timed() && clock_now(game.stm) <= 0) {
+  if ((phase == HUMAN || phase == ENGINE) && timed() && clock_now(game.stm) <= 0) {
     if (phase == ENGINE) stop_engine();
     clock_ms[game.stm] = 0;
     set_result(game.stm == ::WHITE ? "White flagged" : "Black flagged",
