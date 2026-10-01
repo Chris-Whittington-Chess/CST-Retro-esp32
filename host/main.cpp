@@ -4,6 +4,7 @@
 //   cstretro bench                          fixed perft set, prints nodes/s
 //   cstretro sbench [depth] [hash_kb]       fixed-depth search set (node signature)
 //   cstretro [uci]                          UCI engine for test matches
+//   cstretro book <file.bin> [uci moves...]  book moves after those moves
 #include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,7 @@
 #include <string>
 #include "../src/engine/board.h"
 #include "../src/engine/bench.h"
+#include "../src/engine/book.h"
 #include "../src/engine/search.h"
 #include "host.h"
 
@@ -109,8 +111,34 @@ static int key_test() {
   return fails || bad;
 }
 
+static int book_list(int argc, char** argv) {
+  FILE* f = fopen(argv[2], "rb");
+  if (!f) { printf("cannot open %s\n", argv[2]); return 1; }
+  std::string data;
+  char chunk[65536];
+  size_t n;
+  while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) data.append(chunk, n);
+  fclose(f);
+  board.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  for (int i = 3; i < argc; i++) {
+    Move m = parse_uci(board, argv[i]);
+    if (!m) { printf("illegal %s\n", argv[i]); return 1; }
+    board.make(m);
+  }
+  BookMove moves[64];
+  int k = book_moves(board, (const u8*)data.data(), data.size(), moves, 64);
+  printf("%zu entries, key %016llx: %d book moves\n", data.size() / 16, (unsigned long long)board.key, k);
+  for (int i = 0; i < k; i++) {
+    char buf[6];
+    move_to_uci(moves[i].move, buf);
+    printf("  %s %d\n", buf, moves[i].weight);
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2 || !strcmp(argv[1], "uci")) return uci_loop();
+  if (argc >= 3 && !strcmp(argv[1], "book")) return book_list(argc, argv);
   if (!strcmp(argv[1], "sbench")) return search_bench(argc >= 3 ? atoi(argv[2]) : 10, argc >= 4 ? atoi(argv[3]) : 16384);
   if (argc >= 2 && !strcmp(argv[1], "keytest")) return key_test();
   if (argc >= 3 && !strcmp(argv[1], "perft"))

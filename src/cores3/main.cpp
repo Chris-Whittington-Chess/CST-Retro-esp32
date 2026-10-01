@@ -18,10 +18,14 @@
 #include <Preferences.h>
 #include "../engine/bench.h"
 #include "../engine/board.h"
+#include "../engine/book.h"
 #include "../engine/eval.h"
 #include "../engine/search.h"
 #include "../engine/tt.h"
 #include "pieces.h"
+
+extern const uint8_t book_start[] asm("_binary_data_Jeroen_bin_start");
+extern const uint8_t book_end[] asm("_binary_data_Jeroen_bin_end");
 
 // ---------------------------------------------------------------- layout
 
@@ -83,6 +87,9 @@ static int promo_from = -1, promo_to;  // promotion chooser open
 static bool menu_open;
 static bool dirty = true;  // full redraw wanted
 static bool autoplay;      // serial 'a': the engine plays both sides
+static bool use_book = true;
+static bool last_from_book;
+static u32 book_move_at;  // a book move is shown after a short pause
 
 // ---------------------------------------------------------------- engine task
 
@@ -138,6 +145,7 @@ static void engine_command(int c) {
 }
 
 static void stop_engine() {
+  eng_done = false;  // also cancels a book move waiting to be shown
   if (!eng_busy) return;
   search_stop = true;
   while (eng_busy) delay(1);
@@ -146,6 +154,19 @@ static void stop_engine() {
 }
 
 static void start_engine() {
+  phase = ENGINE;
+  info_depth = 0;
+  if (use_book) {
+    Move m = book_pick(game, book_start, size_t(book_end - book_start), esp_random());
+    if (m) {
+      eng_move = m;
+      eng_done = true;
+      last_from_book = true;
+      book_move_at = millis() + (autoplay ? 0 : 600);
+      return;
+    }
+  }
+  last_from_book = false;
   memcpy(&eng_board, &game, sizeof game);
   Limits lim;
   const TimeControl& tc = TCS[tc_game];
@@ -165,8 +186,6 @@ static void start_engine() {
     lim.hard_ms = u32(hard > 1 ? hard : 1);
   }
   eng_limits = lim;
-  info_depth = 0;
-  phase = ENGINE;
   engine_command('g');
 }
 
@@ -199,8 +218,9 @@ static void check_game_over() {
 
 static void beep() { M5.Speaker.tone(1800, 25); }
 
-static void play(Move m) {
+static void play(Move m, bool engine = false) {
   u32 now = millis();
+  if (!engine) last_from_book = false;
   int us = game.stm;
   clock_hist[game.hply][0] = clock_ms[0];
   clock_hist[game.hply][1] = clock_ms[1];
@@ -411,7 +431,7 @@ static void draw_status() {
   if (last_move) {
     char mv[6];
     move_to_uci(last_move, mv);
-    snprintf(buf, sizeof buf, "last %s", mv);
+    snprintf(buf, sizeof buf, "%s %s", last_from_book ? "book" : "last", mv);
     line(DIM, buf);
   }
   line(DIM, TCS[tc_game].name);
@@ -428,7 +448,7 @@ static void draw_panel() {
 }
 
 // Menu: a column of full-width buttons.
-enum { MENU_X = 20, MENU_W = 280, MENU_Y0 = 34, MENU_H = 34, MENU_GAP = 6, MENU_ITEMS = 5 };
+enum { MENU_X = 20, MENU_W = 280, MENU_Y0 = 30, MENU_H = 30, MENU_GAP = 5, MENU_ITEMS = 6 };
 
 static void menu_label(int i, char* out) {
   switch (i) {
@@ -437,7 +457,8 @@ static void menu_label(int i, char* out) {
     case 2:
       snprintf(out, 48, "Time: %s%s", TCS[tc_index].name, tc_index != tc_game ? " (next game)" : "");
       break;
-    case 3: snprintf(out, 48, "Flip board"); break;
+    case 3: snprintf(out, 48, "Opening book: %s", use_book ? "on" : "off"); break;
+    case 4: snprintf(out, 48, "Flip board"); break;
     default: snprintf(out, 48, "Close"); break;
   }
 }
@@ -493,7 +514,11 @@ static void tap_menu(int x, int y) {
         turn_start = millis();
       }
       break;
-    case 3: flipped = !flipped; menu_open = false; break;
+    case 3:
+      use_book = !use_book;
+      prefs.putBool("book", use_book);
+      break;
+    case 4: flipped = !flipped; menu_open = false; break;
     default: menu_open = false; break;
   }
   dirty = true;
@@ -620,6 +645,7 @@ void setup() {
   prefs.begin("cstretro", false);
   tc_index = prefs.getInt("tc", DEFAULT_TC);
   if (tc_index < 0 || tc_index >= NUM_TCS) tc_index = DEFAULT_TC;
+  use_book = prefs.getBool("book", true);
   new_game(::WHITE);
   Serial.printf("CST Retro ready, internal free %u KB\n",
                 unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
@@ -632,9 +658,9 @@ void loop() {
   auto t = M5.Touch.getDetail();
   if (t.wasPressed()) tap(t.x, t.y);
 
-  if (eng_done) {
+  if (eng_done && (!last_from_book || int32_t(millis() - book_move_at) >= 0)) {
     eng_done = false;
-    if (phase == ENGINE && eng_move) play(eng_move);
+    if (phase == ENGINE && eng_move) play(eng_move, true);
   }
 
   // flag fall
