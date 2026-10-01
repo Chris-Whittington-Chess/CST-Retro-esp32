@@ -89,4 +89,7 @@ void move_to_uci(Move m, char* out);
 // Find the legal move matching a long algebraic string; 0 if none.
 Move parse_uci(Board& b, const char* s);
 
+// Depth <= MAX_PERFT_DEPTH (returns 0 beyond it); move lists live on a shared
+// static stack with MAX_MOVES room per ply (16 KB).
+enum { MAX_PERFT_DEPTH = 16, MOVE_STACK_SIZE = MAX_PERFT_DEPTH * MAX_MOVES };
 u64 perft(Board& b, int depth);

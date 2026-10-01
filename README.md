@@ -44,8 +44,18 @@ Stage 1 - movegen/perft (bench = 6 standard positions, 16,046,250 nodes):
 
 | Where | Bench | Notes |
 |---|---|---|
-| PC (Ryzen 9 8945HS, clang-cl /O2) | 22 Mnps | perft.epd, marcel, ferdy suites: 0 failures; Polyglot keys 9/9 |
-| CoreS3 | - | to measure |
+| PC (Ryzen 9 8945HS, clang-cl /O2) | 22-30 Mnps | perft.epd, marcel, ferdy suites: 0 failures; Polyglot keys 9/9 |
+| CoreS3 (240 MHz, -O2) | 247 knps (65 s) | perft.epd (174 positions, 705 checks <= 1M nodes): 0 failures, 206 knps |
+
+Device notes:
+- Hot code in IRAM (IRAM_ATTR) made no difference (64.99 s both ways): the
+  loop already lives in the instruction cache. Not used.
+- ~970 cycles per perft node; most of it is the full `attacked()` legality
+  test after every move. Cheaper legality (only test king moves, en passant,
+  checks and pinned pieces) is the obvious speed-up if movegen ever matters.
+- The Arduino loop task has an 8 KB stack: move lists must not live on it
+  (1 KB per ply overflowed at depth 6). Perft, and later the search, use a
+  shared static move stack.
 
 ## Plan
 

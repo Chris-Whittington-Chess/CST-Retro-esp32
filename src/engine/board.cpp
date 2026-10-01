@@ -402,14 +402,22 @@ Move parse_uci(Board& b, const char* s) {
   return 0;
 }
 
-u64 perft(Board& b, int depth) {
-  Move moves[MAX_MOVES];
+// Move lists go on one shared stack, not the task stack: the ESP32 Arduino
+// loop task has only 8 KB, and a 1 KB list per ply overflowed it at depth 6.
+static Move move_stack[MOVE_STACK_SIZE];
+
+static u64 perft_at(Board& b, int depth, Move* moves) {
   int n = b.gen(moves);
   u64 nodes = 0;
   for (int i = 0; i < n; i++) {
     b.make(moves[i]);
-    if (!b.illegal()) nodes += depth > 1 ? perft(b, depth - 1) : 1;
+    if (!b.illegal()) nodes += depth > 1 ? perft_at(b, depth - 1, moves + MAX_MOVES) : 1;
     b.unmake();
   }
   return nodes;
+}
+
+u64 perft(Board& b, int depth) {
+  if (depth < 1 || depth > MAX_PERFT_DEPTH) return 0;
+  return perft_at(b, depth, move_stack);
 }
