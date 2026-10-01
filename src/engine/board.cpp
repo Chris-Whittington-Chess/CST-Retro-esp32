@@ -36,30 +36,38 @@ static const u64 SIDE_KEY = Polyglot64[780];
 
 // ---- piece placement (keeps lists, idx and key in step) ----
 
+template <bool KEY>
 void Board::put(int s, int p) {
   int c = piece_color(p);
   sq[s] = u8(p);
   idx[s] = count[c];
   list[c][count[c]++] = u8(s);
-  key ^= piece_key(p, s);
+  psq[c] += PST[p][s];
+  phase += PHASE_INC[piece_type(p)];
+  if (KEY) key ^= piece_key(p, s);
 }
 
+template <bool KEY>
 void Board::remove(int s) {
   int p = sq[s], c = piece_color(p);
   int i = idx[s], last = list[c][--count[c]];
   list[c][i] = u8(last);
   idx[last] = u8(i);
   sq[s] = EMPTY;
-  key ^= piece_key(p, s);
+  psq[c] -= PST[p][s];
+  phase -= PHASE_INC[piece_type(p)];
+  if (KEY) key ^= piece_key(p, s);
 }
 
+template <bool KEY>
 void Board::shift(int from, int to) {
   int p = sq[from], c = piece_color(p);
   sq[to] = u8(p);
   sq[from] = EMPTY;
   idx[to] = idx[from];
   list[c][idx[to]] = u8(to);
-  key ^= piece_key(p, from) ^ piece_key(p, to);
+  psq[c] += PST[p][to] - PST[p][from];
+  if (KEY) key ^= piece_key(p, from) ^ piece_key(p, to);
 }
 
 // ep square only counts (for the key and FEN-equality) when a pawn of the side
@@ -79,6 +87,8 @@ bool Board::set_fen(const char* fen) {
   memset(sq, EMPTY, sizeof sq);
   count[0] = count[1] = 0;
   key = 0;
+  psq[0] = psq[1] = 0;
+  phase = 0;
   hply = 0;
   // Collect the pieces, then place kings first so they sit at list index 0.
   int n = 0;
@@ -99,12 +109,12 @@ bool Board::set_fen(const char* fen) {
   }
   int kings = 0;
   for (int i = 0; i < n; i++)
-    if (piece_type(placed[i].piece) == KING) { put(placed[i].s, placed[i].piece); kings++; }
+    if (piece_type(placed[i].piece) == KING) { put<true>(placed[i].s, placed[i].piece); kings++; }
   if (kings != 2 || piece_color(sq[list[WHITE][0]]) != WHITE || count[BLACK] != 1) return false;
   for (int i = 0; i < n; i++)
     if (piece_type(placed[i].piece) != KING) {
       if (count[piece_color(placed[i].piece)] >= 16) return false;
-      put(placed[i].s, placed[i].piece);
+      put<true>(placed[i].s, placed[i].piece);
     }
   while (*p == ' ') p++;
   stm = (*p == 'b') ? BLACK : WHITE;
@@ -193,35 +203,72 @@ u64 Board::compute_key() const {
 
 // ---- attacks ----
 
-bool Board::attacked(int s, int by) const {
-  // Pawns: a white pawn attacks s from s-15 / s-17, a black one from s+15 / s+17.
-  int pawn = make_piece(by, PAWN);
-  int pd = by == WHITE ? -16 : 16;
-  if (on_board(s + pd - 1) && sq[s + pd - 1] == pawn) return true;
-  if (on_board(s + pd + 1) && sq[s + pd + 1] == pawn) return true;
-  int knight = make_piece(by, KNIGHT);
-  for (int d : KNIGHT_DIRS)
-    if (on_board(s + d) && sq[s + d] == knight) return true;
-  int king = make_piece(by, KING);
-  for (int d : KING_DIRS)
-    if (on_board(s + d) && sq[s + d] == king) return true;
-  int bishop = make_piece(by, BISHOP), rook = make_piece(by, ROOK), queen = make_piece(by, QUEEN);
-  for (int d : BISHOP_DIRS) {
-    int t = s + d;
-    while (on_board(t) && sq[t] == EMPTY) t += d;
-    if (on_board(t) && (sq[t] == bishop || sq[t] == queen)) return true;
+// 0x88 delta tables, indexed by target - from + 119:
+//   ATTACK_MASK: which piece types could attack along that delta on an empty
+//   board (bit per type; pawns split by colour into bits 6 / 7)
+//   STEP: the unit step from 'from' toward 'target' on a queen line, else 0
+enum { WPAWN_BIT = 1 << 6, BPAWN_BIT = 1 << 7 };
+static u8 ATTACK_MASK[240];
+static int8_t STEP[240];
+
+static struct DeltaInit {
+  DeltaInit() {
+    for (int d : KNIGHT_DIRS) ATTACK_MASK[d + 119] |= 1 << KNIGHT;
+    for (int d : KING_DIRS) ATTACK_MASK[d + 119] |= 1 << KING;
+    ATTACK_MASK[15 + 119] |= WPAWN_BIT;
+    ATTACK_MASK[17 + 119] |= WPAWN_BIT;
+    ATTACK_MASK[-15 + 119] |= BPAWN_BIT;
+    ATTACK_MASK[-17 + 119] |= BPAWN_BIT;
+    for (int dir = 0; dir < 8; dir++) {
+      int d = KING_DIRS[dir];
+      bool diag = d == 15 || d == 17 || d == -15 || d == -17;
+      for (int from = 0; from < 128; from++) {
+        if (!on_board(from)) continue;
+        for (int t = from + d; on_board(t); t += d) {
+          ATTACK_MASK[t - from + 119] |= u8((1 << QUEEN) | (1 << (diag ? BISHOP : ROOK)));
+          STEP[t - from + 119] = int8_t(d);
+        }
+      }
+    }
   }
-  for (int d : ROOK_DIRS) {
-    int t = s + d;
-    while (on_board(t) && sq[t] == EMPTY) t += d;
-    if (on_board(t) && (sq[t] == rook || sq[t] == queen)) return true;
+} delta_init;
+
+bool Board::attacked(int s, int by) const {
+  for (int i = 0; i < count[by]; i++) {
+    int from = list[by][i], p = sq[from], t = piece_type(p);
+    int mask = ATTACK_MASK[s - from + 119];
+    if (t == PAWN) {
+      if (mask & (by == WHITE ? WPAWN_BIT : BPAWN_BIT)) return true;
+      continue;
+    }
+    if (!(mask & (1 << t))) continue;
+    if (t == KNIGHT || t == KING) return true;
+    int step = STEP[s - from + 119], x = from + step;
+    while (x != s && sq[x] == EMPTY) x += step;
+    if (x == s) return true;
   }
   return false;
 }
 
+bool Board::leaves_check(Move m, bool was_in_check) const {
+  int us = stm ^ 1, k = list[us][0];
+  if (was_in_check || k == move_to(m) || (m & MF_EP)) return attacked(k, stm);
+  // Otherwise only a piece pinned on a line through 'from' can expose the king.
+  int from = move_from(m), step = STEP[from - k + 119];
+  if (!step) return false;
+  int x = k + step;
+  while (x != from && sq[x] == EMPTY) x += step;
+  if (x != from) return false;  // something (maybe the moved piece) still shields
+  for (x = from + step; on_board(x) && sq[x] == EMPTY;) x += step;
+  if (!on_board(x) || piece_color(sq[x]) != stm) return false;
+  int t = piece_type(sq[x]);
+  bool diag = step == 15 || step == 17 || step == -15 || step == -17;
+  return t == QUEEN || t == (diag ? BISHOP : ROOK);
+}
+
 // ---- move generation ----
 
-int Board::gen(Move* out) const {
+int Board::gen(Move* out, bool quiets) const {
   Move* m = out;
   int us = stm, them = us ^ 1;
   for (int i = 0; i < count[us]; i++) {
@@ -235,7 +282,7 @@ int Board::gen(Move* out) const {
         if (sq[to] == EMPTY) {
           if (promo) {
             for (int pt = QUEEN; pt >= KNIGHT; pt--) *m++ = make_move(from, to, 0, pt);
-          } else {
+          } else if (quiets) {
             *m++ = make_move(from, to);
             if (sq_rank(from) == start_rank && sq[to + up] == EMPTY)
               *m++ = make_move(from, to + up, MF_DOUBLE);
@@ -262,7 +309,7 @@ int Board::gen(Move* out) const {
         for (int k = 0; k < 8; k++) {
           int to = from + dirs[k];
           if (!on_board(to)) continue;
-          if (sq[to] == EMPTY) *m++ = make_move(from, to);
+          if (sq[to] == EMPTY) { if (quiets) *m++ = make_move(from, to); }
           else if (piece_color(sq[to]) == them) *m++ = make_move(from, to, MF_CAPTURE);
         }
         break;
@@ -274,7 +321,7 @@ int Board::gen(Move* out) const {
           for (int k = 0; k < 4; k++) {
             int d = dirs[k];
             for (int to = from + d; on_board(to); to += d) {
-              if (sq[to] == EMPTY) { *m++ = make_move(from, to); continue; }
+              if (sq[to] == EMPTY) { if (quiets) *m++ = make_move(from, to); continue; }
               if (piece_color(sq[to]) == them) *m++ = make_move(from, to, MF_CAPTURE);
               break;
             }
@@ -288,7 +335,7 @@ int Board::gen(Move* out) const {
   // drops impossible rights, make removes them as pieces leave/are taken).
   int base = us == WHITE ? 0x00 : 0x70;
   int ks = us == WHITE ? WK_CASTLE : BK_CASTLE, qs = us == WHITE ? WQ_CASTLE : BQ_CASTLE;
-  if (castle & (ks | qs)) {
+  if (quiets && (castle & (ks | qs))) {
     int k = base + 4;
     if ((castle & ks) && sq[k + 1] == EMPTY && sq[k + 2] == EMPTY && !attacked(k, them) &&
         !attacked(k + 1, them) && !attacked(k + 2, them))
@@ -303,9 +350,10 @@ int Board::gen(Move* out) const {
 int Board::gen_legal(Move* out) {
   Move tmp[MAX_MOVES];
   int n = gen(tmp), legal = 0;
+  bool check = in_check();
   for (int i = 0; i < n; i++) {
     make(tmp[i]);
-    if (!illegal()) out[legal++] = tmp[i];
+    if (!leaves_check(tmp[i], check)) out[legal++] = tmp[i];
     unmake();
   }
   return legal;
@@ -330,22 +378,22 @@ void Board::make(Move m) {
   if (m & MF_EP) {
     int victim = to + (us == WHITE ? -16 : 16);
     u.captured = sq[victim];
-    remove(victim);
+    remove<true>(victim);
   } else {
     u.captured = sq[to];
-    if (u.captured != EMPTY) remove(to);
+    if (u.captured != EMPTY) remove<true>(to);
   }
   if (u.captured != EMPTY || piece_type(p) == PAWN) rule50 = 0;
 
-  shift(from, to);
+  shift<true>(from, to);
   if (int promo = move_promo(m)) {
-    remove(to);
-    put(to, make_piece(us, promo));
+    remove<true>(to);
+    put<true>(to, make_piece(us, promo));
   } else if (m & MF_DOUBLE) {
     ep = u8(ep_if_capturable(*this, to, us));
   } else if (m & MF_CASTLE) {
-    if (to > from) shift(to + 1, to - 1);  // h-rook to f
-    else shift(to - 2, to + 1);            // a-rook to d
+    if (to > from) shift<true>(to + 1, to - 1);  // h-rook to f
+    else shift<true>(to - 2, to + 1);            // a-rook to d
   }
 
   castle &= castle_mask(from) & castle_mask(to);
@@ -361,18 +409,41 @@ void Board::unmake() {
   int us = stm;
 
   if (move_promo(m)) {
-    remove(to);
-    put(to, make_piece(us, PAWN));
+    remove<false>(to);
+    put<false>(to, make_piece(us, PAWN));
   } else if (m & MF_CASTLE) {
-    if (to > from) shift(to - 1, to + 1);
-    else shift(to + 1, to - 2);
+    if (to > from) shift<false>(to - 1, to + 1);
+    else shift<false>(to + 1, to - 2);
   }
-  shift(to, from);
+  shift<false>(to, from);
   if (u.captured != EMPTY) {
     int s = (m & MF_EP) ? to + (us == WHITE ? -16 : 16) : to;
-    put(s, u.captured);
+    put<false>(s, u.captured);
   }
   castle = u.castle;
+  ep = u.ep;
+  rule50 = u.rule50;
+  key = u.key;
+}
+
+// Null move: pass the turn. rule50 = 0 stops repetition scans at it.
+void Board::make_null() {
+  Undo& u = hist[hply++];
+  u.key = key;
+  u.move = 0;
+  u.captured = EMPTY;
+  u.castle = castle;
+  u.ep = ep;
+  u.rule50 = rule50;
+  key ^= ep_key(ep) ^ SIDE_KEY;
+  ep = NO_SQ;
+  rule50 = 0;
+  stm ^= 1;
+}
+
+void Board::unmake_null() {
+  Undo& u = hist[--hply];
+  stm ^= 1;
   ep = u.ep;
   rule50 = u.rule50;
   key = u.key;
@@ -408,10 +479,11 @@ static Move move_stack[MOVE_STACK_SIZE];
 
 static u64 perft_at(Board& b, int depth, Move* moves) {
   int n = b.gen(moves);
+  bool check = b.in_check();
   u64 nodes = 0;
   for (int i = 0; i < n; i++) {
     b.make(moves[i]);
-    if (!b.illegal()) nodes += depth > 1 ? perft_at(b, depth - 1, moves + MAX_MOVES) : 1;
+    if (!b.leaves_check(moves[i], check)) nodes += depth > 1 ? perft_at(b, depth - 1, moves + MAX_MOVES) : 1;
     b.unmake();
   }
   return nodes;

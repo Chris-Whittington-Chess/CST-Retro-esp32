@@ -46,6 +46,11 @@ inline Move make_move(int from, int to, u32 flags = 0, int promo = 0) {
 
 enum { MAX_MOVES = 256, MAX_GAME = 1024 };
 
+// PeSTO piece-square values packed as (eg << 16) + mg per piece code and 0x88
+// square, kept incrementally in Board::psq (tables live in eval.cpp).
+extern int32_t PST[16][128];
+extern const int PHASE_INC[8];
+
 struct Undo {
   u64 key;
   Move move;
@@ -61,6 +66,8 @@ struct Board {
   u8 stm, castle, ep;  // ep: target square, NO_SQ unless a capture is possible
   u8 rule50;
   u64 key;  // Polyglot Zobrist key
+  int32_t psq[2];  // packed PeSTO material + PST per colour
+  int phase;       // 0..24+ (24 = all middlegame material)
   int hply;
   Undo hist[MAX_GAME];
 
@@ -68,20 +75,27 @@ struct Board {
   void to_fen(char* out) const;  // >= 92 bytes
   void make(Move m);
   void unmake();
+  void make_null();
+  void unmake_null();
   bool attacked(int s, int by) const;
   bool in_check() const { return attacked(list[stm][0], stm ^ 1); }
   // Pseudo-legal moves (may leave the king in check); returns the count.
-  int gen(Move* out) const;
+  // quiets = false: captures and promotions only.
+  int gen(Move* out, bool quiets = true) const;
   // Legal moves only (make + check + unmake each).
   int gen_legal(Move* out);
   // The side that just moved left its king attacked.
   bool illegal() const { return attacked(list[stm ^ 1][0], stm); }
+  // Same as illegal() just after make(m), but cheap: only king moves, en
+  // passant, check evasions and pieces on a line with their king are tested.
+  bool leaves_check(Move m, bool was_in_check) const;
   u64 compute_key() const;
 
  private:
-  void put(int s, int p);
-  void remove(int s);
-  void shift(int from, int to);
+  // KEY = false (unmake): the key is restored from history afterwards.
+  template <bool KEY> void put(int s, int p);
+  template <bool KEY> void remove(int s);
+  template <bool KEY> void shift(int from, int to);
 };
 
 // Long algebraic (e2e4, e7e8q). out >= 6 bytes.

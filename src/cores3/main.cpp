@@ -1,14 +1,26 @@
-// Chess System Tal Retro on the M5Stack CoreS3 - stage 1: the engine core's
-// perft bench and correctness suite on the device.
-// Serial (115200): 'b' bench, 'p' perft.epd suite (checks <= 1M nodes),
-// 'm' memory report. The bench also runs once at boot.
+// Chess System Tal Retro on the M5Stack CoreS3 - engine core benchmarks on
+// the device. All engine work runs in its own task (64 KB stack); loop() only
+// reads serial commands (115200):
+//   'b' perft bench   'p' perft.epd suite (checks <= 1M nodes)   'm' memory
+//   's' search bench depth 8, TT 4 MB in PSRAM
+//   'i' search bench depth 8, TT 128 KB in internal SRAM
 #include <M5Unified.h>
 #include "../engine/bench.h"
 #include "../engine/board.h"
+#include "../engine/profile.h"
+#include "../engine/search.h"
+#include "../engine/tt.h"
 
 extern const char perft_epd[] asm("_binary_data_perft_epd_start");
 
 static Board board;  // ~16 KB of history: static, not on the task stack
+static TT tt;
+static void* tt_psram;     // 4 MB
+static void* tt_internal;  // 128 KB
+static TaskHandle_t engine_task;
+static volatile int command;
+
+u32 engine_now_ms() { return millis(); }
 
 static void say(const char* fmt, ...) {
   char buf[160];
@@ -73,6 +85,48 @@ static void suite(u64 max_nodes) {
   say("  %llu nodes, %.1f s, %.0f knps", (unsigned long long)total, s, total / s / 1000);
 }
 
+static void search_bench(bool psram) {
+  size_t bytes = psram ? 4u << 20 : 128u << 10;
+  void* mem = psram ? tt_psram : tt_internal;
+  if (!mem) { say("no TT memory"); return; }
+  tt.init(mem, bytes);
+  say("search bench d8, TT %u KB %s...", unsigned(bytes >> 10), psram ? "PSRAM" : "internal");
+#ifdef SEARCH_PROFILE
+  for (auto& p : prof_total) p = 0;
+#endif
+  uint32_t t0 = millis();
+  u64 n = run_search_bench(board, 8);
+  float s = (millis() - t0) / 1000.0f;
+  say("  %llu nodes, %.1f s, %.1f knps", (unsigned long long)n, s, n / s / 1000);
+#ifdef SEARCH_PROFILE
+  static const char* names[P_COUNT] = {"gen", "order", "make", "check", "eval", "tt"};
+  double total = s * getCpuFrequencyMhz() * 1e6 / n, part = 0;
+  for (int i = 0; i < P_COUNT; i++) {
+    double c = double(prof_total[i]) / n;
+    part += c;
+    say("  %-6s %6.0f cycles/node", names[i], c);
+  }
+  say("  other  %6.0f  (total %.0f)", total - part, total);
+#endif
+  say("  engine stack free %u bytes", unsigned(uxTaskGetStackHighWaterMark(nullptr)));
+}
+
+static void engine_loop(void*) {
+  search_init(&tt);
+  for (;;) {
+    int c = command;
+    if (c) {
+      if (c == 'b') bench();
+      if (c == 'p') suite(1000000);
+      if (c == 'm') memory_report();
+      if (c == 's') search_bench(true);
+      if (c == 'i') search_bench(false);
+      command = 0;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
@@ -81,17 +135,17 @@ void setup() {
   M5.Display.setFont(&fonts::Font2);
   M5.Display.setTextScroll(true);
   M5.Display.clear();
-  say("Chess System Tal Retro - stage 1");
+  say("Chess System Tal Retro - stage 2");
   say("CPU %u MHz", getCpuFrequencyMhz());
+  tt_psram = heap_caps_malloc(4u << 20, MALLOC_CAP_SPIRAM);
+  tt_internal = heap_caps_malloc(128u << 10, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   memory_report();
-  bench();
+  xTaskCreatePinnedToCore(engine_loop, "engine", 64 * 1024, nullptr, 1, &engine_task, 1);
 }
 
 void loop() {
   M5.update();
   int c = Serial.read();
-  if (c == 'b') bench();
-  if (c == 'p') suite(1000000);
-  if (c == 'm') memory_report();
+  if (c > ' ' && !command) command = c;
   delay(10);
 }

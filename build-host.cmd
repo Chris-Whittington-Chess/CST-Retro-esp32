@@ -9,5 +9,5 @@ set LLVM=%VCINSTALLDIR%Tools\Llvm\x64\bin
 cd /d "%~dp0"
 if not exist bin mkdir bin
 "%LLVM%\clang-cl.exe" /nologo /std:c++17 /O2 /GS- /EHsc /DNDEBUG /D_CRT_SECURE_NO_WARNINGS /W3 ^
-    host\main.cpp src\engine\board.cpp /Fobin\ /Febin\cstretro.exe || exit /b 1
+    host\main.cpp host\uci.cpp src\engine\board.cpp src\engine\eval.cpp src\engine\tt.cpp src\engine\search.cpp /Fobin\ /Febin\cstretro.exe || exit /b 1
 echo built bin\cstretro.exe

@@ -2,6 +2,8 @@
 //   cstretro perft <file.epd> [max_nodes]   check every "; Dn count" up to max_nodes
 //   cstretro divide "<fen>" <depth>
 //   cstretro bench                          fixed perft set, prints nodes/s
+//   cstretro sbench [depth] [hash_kb]       fixed-depth search set (node signature)
+//   cstretro [uci]                          UCI engine for test matches
 #include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +11,8 @@
 #include <string>
 #include "../src/engine/board.h"
 #include "../src/engine/bench.h"
+#include "../src/engine/search.h"
+#include "host.h"
 
 static Board board;  // ~16 KB of history: keep it off the stack
 
@@ -16,6 +20,8 @@ static double now() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
+
+u32 engine_now_ms() { return u32(u64(now() * 1000)); }
 
 static int run_epd(const char* path, u64 max_nodes) {
   FILE* f = fopen(path, "r");
@@ -104,6 +110,8 @@ static int key_test() {
 }
 
 int main(int argc, char** argv) {
+  if (argc < 2 || !strcmp(argv[1], "uci")) return uci_loop();
+  if (!strcmp(argv[1], "sbench")) return search_bench(argc >= 3 ? atoi(argv[2]) : 10, argc >= 4 ? atoi(argv[3]) : 16384);
   if (argc >= 2 && !strcmp(argv[1], "keytest")) return key_test();
   if (argc >= 3 && !strcmp(argv[1], "perft"))
     return run_epd(argv[2], argc >= 4 ? strtoull(argv[3], nullptr, 10) : ~0ull);
@@ -132,6 +140,6 @@ int main(int argc, char** argv) {
            r.failures, dt, r.nodes / dt / 1e6);
     return r.failures != 0;
   }
-  printf("usage: cstretro perft <file.epd> [max_nodes] | divide \"<fen>\" <depth> | bench\n");
+  printf("usage: cstretro [uci] | sbench [depth] | perft <file.epd> [max_nodes] | divide \"<fen>\" <depth> | bench | keytest\n");
   return 1;
 }
