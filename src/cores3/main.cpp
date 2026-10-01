@@ -524,35 +524,93 @@ static void tap_menu(int x, int y) {
   dirty = true;
 }
 
-static void tap_board(int s) {
-  if (phase != HUMAN || s < 0) return;
-  if (selected >= 0) {
-    for (int i = 0; i < nsel; i++)
-      if (move_to(sel_moves[i]) == s) {
-        Move m = sel_moves[i];
-        if (move_promo(m)) {
-          promo_from = selected;
-          promo_to = s;
-          dirty = true;
-          return;
-        }
-        play(m);
+// Forgiving touch: taps a little outside the intended square (the touch
+// panel is least accurate at the edges, and square borders are only 30 px
+// apart) snap to the nearest square that makes sense: a legal target of the
+// selected piece, or one of your pieces that can move.
+static Move legal_now[MAX_MOVES];
+static int nlegal_now;
+static u64 legal_key = ~0ull;
+static int drag_from = -1;  // piece selected by the current press (drag to move)
+
+static void refresh_legal() {
+  if (legal_key == game.key) return;
+  nlegal_now = game.gen_legal(legal_now);
+  legal_key = game.key;
+}
+
+static bool movable(int s) {
+  refresh_legal();
+  for (int i = 0; i < nlegal_now; i++)
+    if (move_from(legal_now[i]) == s) return true;
+  return false;
+}
+
+static int snap(int x, int y, bool targets_only) {
+  auto wanted = [&](int s) { return is_target(s) || (!targets_only && movable(s)); };
+  int s = square_at(x, y < 8 * SQ ? y : 8 * SQ - 1);
+  if (s >= 0 && wanted(s)) return s;
+  int best = -1, best_d = (SQ * 2 / 3) * (SQ * 2 / 3);
+  for (int c = 0; c < 128; c++) {
+    if (!on_board(c) || !wanted(c)) continue;
+    int cx, cy;
+    square_xy(c, cx, cy);
+    cx += SQ / 2;
+    cy += SQ / 2;
+    int d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+    if (d < best_d) { best_d = d; best = c; }
+  }
+  return best >= 0 ? best : s;
+}
+
+static void select_square(int s) {
+  refresh_legal();
+  selected = s;
+  nsel = 0;
+  for (int i = 0; i < nlegal_now; i++)
+    if (move_from(legal_now[i]) == s) sel_moves[nsel++] = legal_now[i];
+}
+
+static void move_to_square(int s) {
+  for (int i = 0; i < nsel; i++)
+    if (move_to(sel_moves[i]) == s) {
+      Move m = sel_moves[i];
+      if (move_promo(m)) {
+        promo_from = selected;
+        promo_to = s;
+        dirty = true;
         return;
       }
-  }
-  int p = game.sq[s];
-  if (p != EMPTY && piece_color(p) == human && s != selected) {
-    selected = s;
-    Move all[MAX_MOVES];
-    int n = game.gen_legal(all);
-    nsel = 0;
-    for (int i = 0; i < n; i++)
-      if (move_from(all[i]) == s) sel_moves[nsel++] = all[i];
+      play(m);
+      return;
+    }
+}
+
+static void tap_board(int x, int y) {
+  if (phase != HUMAN) return;
+  int s = snap(x, y, false);
+  if (s < 0) return;
+  if (selected >= 0 && is_target(s)) {
+    move_to_square(s);
+  } else if (movable(s)) {
+    select_square(s);  // tapping the selected piece again keeps it selected
+    drag_from = s;
   } else {
     selected = -1;
     nsel = 0;
   }
   dirty = true;
+}
+
+// Release after pressing a piece: if the finger moved to another square,
+// treat it as a drag and play the move to the (snapped) target.
+static void release_board(int x, int y) {
+  int from = drag_from;
+  drag_from = -1;
+  if (phase != HUMAN || from < 0 || selected != from || menu_open || promo_from >= 0) return;
+  if (x >= PANEL_X || square_at(x, y < 8 * SQ ? y : 8 * SQ - 1) == from) return;
+  int s = snap(x, y, true);
+  if (s >= 0 && is_target(s)) move_to_square(s);
 }
 
 static void tap_promo(int x, int y) {
@@ -573,7 +631,7 @@ static void tap_promo(int x, int y) {
 static void tap(int x, int y) {
   if (menu_open) return tap_menu(x, y);
   if (promo_from >= 0) return tap_promo(x, y);
-  if (x < PANEL_X) return tap_board(square_at(x, y));
+  if (x < PANEL_X) return tap_board(x, y);
   if (y >= BUTTON_Y && x < PANEL_X + 40) return take_back();
   if (y >= BUTTON_Y) {
     menu_open = true;
@@ -651,12 +709,26 @@ void setup() {
                 unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 }
 
+// Touch diagnostics on serial: every press and release with its raw
+// position and square, plus the slowest loop pass since the last print.
+static u32 loop_max_ms;
+
 void loop() {
+  u32 loop_t0 = millis();
   M5.update();
   serial_command();
 
   auto t = M5.Touch.getDetail();
+  if (t.wasPressed() || t.wasReleased()) {
+    int s = square_at(t.x, t.y);
+    char name[3] = "--";
+    if (s >= 0) { name[0] = char('a' + sq_file(s)); name[1] = char('1' + sq_rank(s)); }
+    Serial.printf("touch %s x=%d y=%d sq=%s (slowest loop %u ms)\n",
+                  t.wasPressed() ? "down" : "up  ", t.x, t.y, name, unsigned(loop_max_ms));
+    loop_max_ms = 0;
+  }
   if (t.wasPressed()) tap(t.x, t.y);
+  if (t.wasReleased()) release_board(t.x, t.y);
 
   if (eng_done && (!last_from_book || int32_t(millis() - book_move_at) >= 0)) {
     eng_done = false;
@@ -680,5 +752,7 @@ void loop() {
     refresh_panel();
     last_panel = millis();
   }
+  u32 dt = millis() - loop_t0;
+  if (dt > loop_max_ms) loop_max_ms = dt;
   delay(5);
 }
