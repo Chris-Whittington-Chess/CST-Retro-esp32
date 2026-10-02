@@ -86,6 +86,17 @@ Stage 2 - search bench (12 positions, depth 8, node counts identical on PC and d
 | CoreS3, TT 128 KB internal | 80 knps (real games ~85-110 knps) | ~3000 cycles/node: gen 770, order 550, make 690, check 550, eval 50, TT 53 |
 | CoreS3, TT 4 MB PSRAM | 54 knps | TT probe ~520 cycles/node |
 
+Strength (PC, 10+0.1, UHO_4060_v4 openings, SPRT elo0=0 elo1=5):
+
+| Test | Result | Games |
+|---|---|---|
+| SEE (ordering, quiescence, pruning) vs none | +57.2 +/- 19.1, H1 | 230-121-317 (668) |
+| NNUE 768->64->1 v1 vs PeSTO (both with SEE) | +233.0 +/- 45.1, H1 | 198-37-40 (275) |
+
+NNUE v1: 7.09M quiet positions from 164k CStal-5 match games, labelled by
+CStal-5 at depth 6 (tools/nnue). On the CoreS3 it costs ~20% nps (PIE SIMD)
+and the TT drops to 32 KB to make room for the 96 KB of weights.
+
 Device notes:
 - Hot code in IRAM (IRAM_ATTR) made no difference: the loop already lives in
   the instruction cache.
