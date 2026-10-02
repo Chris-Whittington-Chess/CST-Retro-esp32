@@ -214,7 +214,10 @@ int search(Board& b, int alpha, int beta, int depth, int ply, int base, bool nul
   PROF(P_GEN, n = b.gen(m));
   PROF(P_ORDER, score_moves(b, m, sc, n, tt_move, ply));
 
-  Move quiets[MAX_QUIETS];
+  // The quiet moves searched before a cutoff get a history malus. Rather than
+  // a local list (256 bytes a ply: the 7" board's 16 KB engine stack
+  // overflowed at ~35 plies in a long endgame search), each picked move's
+  // score slot - not used again once picked - marks it: 1 = a searched quiet.
   int nquiets = 0, legal = 0, best = -INF;
   Move best_move = 0;
   const int orig_alpha = alpha;
@@ -222,6 +225,7 @@ int search(Board& b, int alpha, int beta, int depth, int ply, int base, bool nul
   for (int i = 0; i < n; i++) {
     Move mv;
     PROF(P_ORDER, mv = pick(m, sc, n, i));
+    sc[i] = 0;  // not (yet) a searched quiet
     // SEE pruning: near the leaves, skip moves that lose material outright
     // (never the first move, the TT move, or when in check).
     if (search_options.see_prune && !root && !in_check && legal && depth <= 8 &&
@@ -276,14 +280,17 @@ int search(Board& b, int alpha, int beta, int depth, int ply, int base, bool nul
             }
             int bonus = depth * depth > 1200 ? 1200 : depth * depth;
             update_history(b.sq[move_from(mv)], move_to(mv), bonus);
-            for (int q = 0; q < nquiets; q++)
-              update_history(b.sq[move_from(quiets[q])], move_to(quiets[q]), -bonus);
+            for (int q = 0; q < i; q++)
+              if (sc[q] == 1) update_history(b.sq[move_from(m[q])], move_to(m[q]), -bonus);
           }
           break;
         }
       }
     }
-    if (quiet && nquiets < MAX_QUIETS) quiets[nquiets++] = mv;
+    if (quiet && nquiets < MAX_QUIETS) {
+      sc[i] = 1;
+      nquiets++;
+    }
   }
 
   if (!legal) return in_check ? -MATE + ply : 0;

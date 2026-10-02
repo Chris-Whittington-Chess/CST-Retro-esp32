@@ -1338,13 +1338,18 @@ void setup() {
   if (!&game || !clock_hist || !info_ring) usb_println("PSRAM allocation failed");
   boot_note("start");
 
-  // Internal SRAM, biggest contiguous blocks first: the net (96 KB in one
-  // piece, PeSTO only without it), then the biggest TT that leaves room for
-  // the display's bounce buffers (2 x 12.5 KB), the engine task's stack and
-  // 24 KB for the system, then those.
+  // Internal SRAM, biggest contiguous blocks first: the engine task's stack
+  // (20 KB in one piece, taken while the big block is whole), the net (96 KB
+  // in one piece, PeSTO only without it), then the biggest TT that leaves room
+  // for the display's bounce buffers (2 x 12.5 KB) and 18 KB for the system.
+  // Engine stack: ~11.3 KB used at selective depth 42; 20 KB covers the
+  // 64-ply limit (16 KB overflowed in a long endgame search).
+  enum { ENGINE_STACK = 20 * 1024, LATER = 2 * 13 * 1024 + 18 * 1024 };
+  static StaticTask_t eng_tcb;
+  StackType_t* eng_stack = (StackType_t*)heap_caps_malloc(ENGINE_STACK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  boot_note(eng_stack ? "engine stack" : "NO STACK");
   load_net();
   boot_note(nnue_ok ? "NNUE loaded" : "NNUE FAILED");
-  enum { ENGINE_STACK = 16 * 1024, LATER = 2 * 13 * 1024 + ENGINE_STACK + 24 * 1024 };
   size_t tt_bytes = 128 * 1024;
   void* mem = nullptr;
   for (; tt_bytes >= 8 * 1024; tt_bytes /= 2) {
@@ -1382,8 +1387,10 @@ void setup() {
 #else
   disableCore0WDT();
 #endif
-  if (xTaskCreatePinnedToCore(engine_loop, "engine", ENGINE_STACK, nullptr, 1, &eng_task, 0) != pdPASS)
-    usb_println("engine task not created: out of internal SRAM");
+  if (eng_stack)
+    eng_task = xTaskCreateStaticPinnedToCore(engine_loop, "engine", ENGINE_STACK, nullptr, 1, eng_stack,
+                                             &eng_tcb, 0);
+  if (!eng_task) usb_println("engine task not created: out of internal SRAM");
   boot_note(eng_task ? "engine task" : "NO ENGINE");
   search_init(&tt);  // before anything (new_game) uses the TT - not in the engine task
   usb_printf("LCD %s, TT %u KB\n", lcd_ok ? "ok" : "FAILED", mem ? unsigned(tt_bytes >> 10) : 0);

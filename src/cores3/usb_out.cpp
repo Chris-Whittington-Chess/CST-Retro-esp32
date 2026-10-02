@@ -29,16 +29,18 @@ static void writer(void*) {
     size_t n = xStreamBufferReceive(queue_, chunk, sizeof chunk, portMAX_DELAY);
     size_t done = 0;
     uint32_t wait_from = 0;
+    bool waiting = false;
     while (done < n) {
       if (!usb_serial_jtag_ll_txfifo_writable()) {
-        if (!wait_from) wait_from = millis() | 1;
+        if (!waiting) wait_from = millis();
+        waiting = true;
         vTaskDelay(1);  // the PC hasn't collected the last packet yet
         continue;
       }
-      if (wait_from) {
+      if (waiting) {
         uint32_t w = millis() - wait_from;
         if (w > longest_wait_ms_) longest_wait_ms_ = w;
-        wait_from = 0;
+        waiting = false;
       }
       done += usb_serial_jtag_ll_write_txfifo(chunk + done, uint32_t(n - done));
       usb_serial_jtag_ll_txfifo_flush();

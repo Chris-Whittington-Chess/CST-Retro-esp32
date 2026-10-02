@@ -1155,7 +1155,9 @@ void setup() {
   // only 16 KB on IDF 5 (the net splits the big block). Then the engine
   // task (its 16 KB stack from a smaller region), then the net (PeSTO only
   // without it).
-  enum { ENGINE_STACK = 16 * 1024, NET_WEIGHTS = 97 * 1024, NET_TOTAL = 115 * 1024 };
+  // Engine stack: ~11.3 KB used at selective depth 42; 20 KB covers the
+  // 64-ply limit (16 KB overflowed in a long endgame search on the 7" board).
+  enum { ENGINE_STACK = 20 * 1024, NET_WEIGHTS = 97 * 1024, NET_TOTAL = 115 * 1024 };
   // The engine task's stack first, so it comes from one of the small heap
   // regions rather than the big block the net needs.
   static StaticTask_t eng_tcb;
