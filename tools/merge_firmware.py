@@ -50,8 +50,8 @@ for board in boards:
         for _, f in parts:
             if not f or not f.exists():
                 sys.exit(f"missing {f} - build first: pio run -e {board}")
-        cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge-bin", "-o", str(out),
-               "--flash-mode", "keep", "--flash-freq", "keep", "--flash-size", "keep"]
+        cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge_bin", "-o", str(out),
+               "--flash_mode", "keep", "--flash_freq", "keep", "--flash_size", "keep"]  # underscores: esptool 4 and 5
         for off, f in parts:
             cmd += [off, str(f)]
         subprocess.run(cmd, check=True)
