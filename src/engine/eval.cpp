@@ -1,5 +1,6 @@
 // Chess System Tal Retro - PeSTO evaluation. See eval.h.
 #include "eval.h"
+#include "nnue.h"
 
 namespace {
 // material, PAWN..KING
@@ -159,10 +160,21 @@ void init_eval() {
     }
 }
 
-int evaluate(const Board& b) {
+int evaluate_pesto(const Board& b) {
   int32_t d = b.psq[b.stm] - b.psq[b.stm ^ 1];
   int mgp = b.phase > 24 ? 24 : b.phase;
   return (unpack_mg(d) * mgp + unpack_eg(d) * (24 - mgp)) / 24;
+}
+
+EvalMode eval_mode = EVAL_PESTO;
+volatile int nnue_sink;  // keeps the cost-mode network evaluation from being optimised away
+
+int evaluate(const Board& b) {
+  if (eval_mode == EVAL_PESTO || !nnue_ready()) return evaluate_pesto(b);
+  int nn = nnue_evaluate(b);
+  if (eval_mode == EVAL_NNUE) return nn;
+  nnue_sink = nn;
+  return evaluate_pesto(b);
 }
 
 bool insufficient_material(const Board& b) { return b.no_mating_material(); }

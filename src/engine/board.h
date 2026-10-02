@@ -55,7 +55,7 @@ extern const int PHASE_INC[8];
 
 struct Undo {
   u64 key;
-  Move move;
+  Move move;  // as played, plus the moving piece in bits 24-27
   u8 captured;  // piece taken (EMPTY if none)
   u8 castle, ep, rule50;
 };

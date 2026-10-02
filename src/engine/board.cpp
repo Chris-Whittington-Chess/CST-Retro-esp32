@@ -250,13 +250,13 @@ int Board::gen_legal(Move* out) {
 
 void Board::make(Move m) {
   Undo& u = hist[hply++];
+  int from = move_from(m), to = move_to(m), us = stm;
+  int p = sq[from];
   u.key = key;
-  u.move = m;
+  u.move = m | u32(p) << 24;  // the moving piece rides along (NNUE updates)
   u.castle = castle;
   u.ep = ep;
   u.rule50 = rule50;
-  int from = move_from(m), to = move_to(m), us = stm;
-  int p = sq[from];
 
   key ^= ep_key(ep) ^ castle_key(castle) ^ SIDE_KEY;
   ep = NO_SQ;

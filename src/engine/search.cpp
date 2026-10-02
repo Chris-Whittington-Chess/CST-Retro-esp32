@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include "eval.h"
+#include "nnue.h"
 #include "profile.h"
 
 SearchOptions search_options;
@@ -305,6 +306,7 @@ SearchResult search(Board& b, const Limits& lim, ReportFn report) {
   nodes = 0;
   stopped = false;
   tt->new_search();
+  if (eval_mode != EVAL_PESTO) nnue_new_root(b);
   memset(killers, 0, sizeof killers);
   for (auto& row : history)
     for (auto& h : row) h = int16_t(h / 2);

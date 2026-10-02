@@ -5,6 +5,8 @@
 //   cstretro sbench [depth] [hash_kb]       fixed-depth search set (node signature)
 //   cstretro [uci]                          UCI engine for test matches
 //   cstretro book <file.bin> [uci moves...]  book moves after those moves
+//   cstretro nncheck <N>                    NNUE incremental == refresh (random net)
+//   cstretro nnbench <N> [depth] [hash_kb]  search bench paying the NNUE cost
 #include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,6 +141,9 @@ static int book_list(int argc, char** argv) {
 int main(int argc, char** argv) {
   if (argc < 2 || !strcmp(argv[1], "uci")) return uci_loop();
   if (argc >= 3 && !strcmp(argv[1], "book")) return book_list(argc, argv);
+  if (argc >= 3 && !strcmp(argv[1], "nncheck")) return nnue_test(atoi(argv[2]));
+  if (argc >= 3 && !strcmp(argv[1], "nnbench"))
+    return nnue_bench(atoi(argv[2]), argc >= 4 ? atoi(argv[3]) : 8, argc >= 5 ? atoi(argv[4]) : 128);
   if (!strcmp(argv[1], "sbench")) return search_bench(argc >= 3 ? atoi(argv[2]) : 10, argc >= 4 ? atoi(argv[3]) : 16384);
   if (argc >= 2 && !strcmp(argv[1], "keytest")) return key_test();
   if (argc >= 3 && !strcmp(argv[1], "perft"))

@@ -8,6 +8,7 @@
 #include "../src/engine/bench.h"
 #include "../src/engine/board.h"
 #include "../src/engine/eval.h"
+#include "../src/engine/nnue.h"
 #include "../src/engine/search.h"
 #include "../src/engine/uci_util.h"
 #include "host.h"
@@ -52,6 +53,7 @@ int uci_loop() {
     if (!strcmp(line, "uci")) {
       printf("id name CST Retro\nid author Chris Whittington\n");
       printf("option name Hash type spin default 16 min 1 max 1024\n");
+      printf("option name Eval type combo default PeSTO var PeSTO var NNUE\n");
       printf("uciok\n");
     } else if (!strcmp(line, "isready")) {
       printf("readyok\n");
@@ -59,6 +61,10 @@ int uci_loop() {
       search_new_game();
     } else if (!strncmp(line, "setoption name Hash value ", 26)) {
       set_hash(atoi(line + 26));
+    } else if (!strncmp(line, "setoption name Eval value ", 26)) {
+      eval_mode = strcmp(line + 26, "NNUE") ? EVAL_PESTO : EVAL_NNUE;
+      if (eval_mode == EVAL_NNUE && !nnue_ready())
+        printf("info string no NNUE loaded, using PeSTO\n");
     } else if (!strncmp(line, "position ", 9)) {
       uci_position(board, line + 9);
     } else if (!strncmp(line, "go", 2)) {
@@ -72,6 +78,71 @@ int uci_loop() {
     }
     fflush(stdout);
   }
+  return 0;
+}
+
+// ---- NNUE (random weights until a trained net exists) ----
+
+static void* nn_w;
+static void* nn_acc;
+
+static bool nnue_random(int n) {
+  free(nn_w);
+  free(nn_acc);
+  nn_w = malloc(nnue_weight_bytes(n));
+  nn_acc = malloc(nnue_acc_bytes(n));
+  if (!nnue_setup_random(n, 12345, nn_w, nn_acc)) {
+    printf("bad NNUE width %d (multiple of 8, <= %d)\n", n, int(NNUE_MAX_N));
+    return false;
+  }
+  return true;
+}
+
+static u64 checked, mismatches;
+static void check_walk(int depth) {
+  checked++;
+  if (!nnue_check(board)) mismatches++;
+  if (!depth) return;
+  Move moves[MAX_MOVES];
+  int n = board.gen_legal(moves);
+  for (int i = 0; i < n; i++) {
+    board.make(moves[i]);
+    check_walk(depth - 1);
+    board.unmake();
+  }
+}
+
+// Incremental accumulators == full refresh at every node of depth-3 trees
+// (also exercises re-entering sibling lines after unmake), and null moves.
+int nnue_test(int n) {
+  if (!nnue_random(n)) return 1;
+  checked = mismatches = 0;
+  for (const char* f : SEARCH_BENCH_FENS) {
+    board.set_fen(f);
+    nnue_new_root(board);
+    check_walk(3);
+    board.make_null();
+    check_walk(2);
+    board.unmake_null();
+  }
+  printf("nncheck N=%d: %llu positions, %llu mismatches\n", n, (unsigned long long)checked,
+         (unsigned long long)mismatches);
+  return mismatches != 0;
+}
+
+// The search bench with the NNUE computed at every node but PeSTO's score
+// returned: same tree as sbench, the time difference is the network's cost.
+int nnue_bench(int n, int depth, int hash_kb) {
+  if (!nnue_random(n)) return 1;
+  set_hash_kb(hash_kb);
+  search_init(&tt);
+  eval_mode = EVAL_NNUE_COST;
+  u32 t0 = engine_now_ms();
+  u64 total = run_search_bench(board, depth);
+  u32 ms = engine_now_ms() - t0;
+  eval_mode = EVAL_PESTO;
+  printf("nnbench N=%d depth %d hash %d KB: %llu nodes, %u ms, %llu knps\n", n, depth, hash_kb,
+         (unsigned long long)total, ms, (unsigned long long)(ms ? total / ms : 0));
   return 0;
 }
 

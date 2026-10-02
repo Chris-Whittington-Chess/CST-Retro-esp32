@@ -1,12 +1,18 @@
 // Chess System Tal Retro on the M5Stack CoreS3 - engine core benchmarks on
-// the device. All engine work runs in its own task (64 KB stack); loop() only
+// the device. All engine work runs in its own task (24 KB stack); loop() only
 // reads serial commands (115200):
 //   'b' perft bench   'p' perft.epd suite (checks <= 1M nodes)   'm' memory
 //   's' search bench depth 8, TT 4 MB in PSRAM
-//   'i' search bench depth 8, TT 128 KB in internal SRAM
+//   'i' search bench depth 8, TT 64 KB in internal SRAM (PeSTO)
+//   '1'..'4' the same with a random-weight NNUE of width 32/64/128/256
+//            computed at every node (EVAL_NNUE_COST: PeSTO's tree, so the
+//            time difference is the network's cost); weights in internal
+//            SRAM when they fit, else PSRAM
 #include <M5Unified.h>
 #include "../engine/bench.h"
 #include "../engine/board.h"
+#include "../engine/eval.h"
+#include "../engine/nnue.h"
 #include "../engine/profile.h"
 #include "../engine/search.h"
 #include "../engine/tt.h"
@@ -16,7 +22,7 @@ extern const char perft_epd[] asm("_binary_data_perft_epd_start");
 static Board board;  // ~16 KB of history: static, not on the task stack
 static TT tt;
 static void* tt_psram;     // 4 MB
-static void* tt_internal;  // 128 KB
+static void* tt_internal;  // 64 KB
 static TaskHandle_t engine_task;
 static volatile int command;
 
@@ -86,7 +92,7 @@ static void suite(u64 max_nodes) {
 }
 
 static void search_bench(bool psram) {
-  size_t bytes = psram ? 4u << 20 : 128u << 10;
+  size_t bytes = psram ? 4u << 20 : 64u << 10;
   void* mem = psram ? tt_psram : tt_internal;
   if (!mem) { say("no TT memory"); return; }
   tt.init(mem, bytes);
@@ -111,6 +117,33 @@ static void search_bench(bool psram) {
   say("  engine stack free %u bytes", unsigned(uxTaskGetStackHighWaterMark(nullptr)));
 }
 
+static void* alloc_prefer_internal(size_t bytes, const char** where) {
+  void* p = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  *where = "internal";
+  if (!p) {
+    p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    *where = "PSRAM";
+  }
+  return p;
+}
+
+static void nnue_bench(int n) {
+  const char *wwhere, *awhere;
+  void* w = alloc_prefer_internal(nnue_weight_bytes(n), &wwhere);
+  void* a = alloc_prefer_internal(nnue_acc_bytes(n), &awhere);
+  if (!w || !a || !nnue_setup_random(n, 12345, w, a)) {
+    say("NNUE N=%d: no memory", n);
+  } else {
+    say("NNUE 768->%d: weights %u KB %s, acc %u KB %s", n, unsigned(nnue_weight_bytes(n) >> 10),
+        wwhere, unsigned(nnue_acc_bytes(n) >> 10), awhere);
+    eval_mode = EVAL_NNUE_COST;
+    search_bench(false);
+    eval_mode = EVAL_PESTO;
+  }
+  free(w);
+  free(a);
+}
+
 static void engine_loop(void*) {
   search_init(&tt);
   for (;;) {
@@ -121,6 +154,7 @@ static void engine_loop(void*) {
       if (c == 'm') memory_report();
       if (c == 's') search_bench(true);
       if (c == 'i') search_bench(false);
+      if (c >= '1' && c <= '4') nnue_bench(32 << (c - '1'));
       command = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -138,9 +172,9 @@ void setup() {
   say("Chess System Tal Retro - stage 2");
   say("CPU %u MHz", getCpuFrequencyMhz());
   tt_psram = heap_caps_malloc(4u << 20, MALLOC_CAP_SPIRAM);
-  tt_internal = heap_caps_malloc(128u << 10, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  tt_internal = heap_caps_malloc(64u << 10, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   memory_report();
-  xTaskCreatePinnedToCore(engine_loop, "engine", 64 * 1024, nullptr, 1, &engine_task, 1);
+  xTaskCreatePinnedToCore(engine_loop, "engine", 24 * 1024, nullptr, 1, &engine_task, 1);
 }
 
 void loop() {
