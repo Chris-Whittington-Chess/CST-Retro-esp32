@@ -1,9 +1,9 @@
 """Render the chess pieces for the board UI from DejaVu Sans' chess glyphs
 (U+2654..U+265F; DejaVu fonts are under the permissive Bitstream Vera licence).
 
-  python tools/make_pieces.py [square_px]    (needs Pillow)
+  python tools/make_pieces.py [square_px] [board_dir]    (needs Pillow)
 
-Writes src/cores3/pieces.h: for each colour and type (PAWN..KING), a
+Writes src/<board_dir>/pieces.h (default cores3; ws7 uses 60 px): for each colour and type (PAWN..KING), a
 square_px x square_px image of (grey, alpha) byte pairs, blended at run time
 over the square colour. White pieces: white body, black outline. Black pieces:
 the solid black glyph (its detail lines show white) over a white body.
@@ -15,6 +15,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 SQ = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+BOARD_DIR = sys.argv[2] if len(sys.argv) > 2 else "cores3"
 SS = 8  # supersampling
 CLOSE = 4 * SS + 1  # gap closing for the body fill (odd, in supersampled px)
 TTF = r"C:\Windows\Fonts\DejaVuSans.ttf"
@@ -83,7 +84,7 @@ for c in range(2):
         lines.append("    {" + ",\n     ".join(rows) + "},")
     lines.append("  },")
 lines.append("};")
-(ROOT / "src" / "cores3" / "pieces.h").write_text("\n".join(lines) + "\n")
+(ROOT / "src" / BOARD_DIR / "pieces.h").write_text("\n".join(lines) + "\n")
 
 # preview: both colours on light and dark squares, 4x
 light, dark = (240, 217, 181), (181, 136, 99)
