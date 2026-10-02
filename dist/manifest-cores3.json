@@ -1,13 +1,13 @@
 {
   "name": "CST Retro - M5Stack CoreS3 (2 inch, 320x240)",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "cst-retro-0.1.1-cores3.bin",
+          "path": "cst-retro-0.1.2-cores3.bin",
           "offset": 0
         }
       ]

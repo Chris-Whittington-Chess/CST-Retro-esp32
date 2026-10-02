@@ -22,6 +22,8 @@
 //   "touchlog" toggles printing every touch.
 #include <M5Unified.h>
 #include <Preferences.h>
+#include <esp_log.h>
+#include <esp_task_wdt.h>
 #include "usb_out.h"
 #include "../engine/bench.h"
 #include "../engine/board.h"
@@ -43,7 +45,6 @@ extern const uint8_t net_end[] asm("_binary_data_net_bin_end");
 
 enum { SQ = 30, PANEL_X = 240, PANEL_W = 80, SCREEN_W = 320, SCREEN_H = 240 };
 enum { CLOCK_H = 34, TOP_CLOCK_Y = 2, BOTTOM_CLOCK_Y = 156, BUTTON_Y = 196, BUTTON_H = 42 };
-enum { TT_BYTES = 64 * 1024 };  // leaves internal SRAM for the NNUE
 
 struct RGB {
   uint8_t r, g, b;
@@ -84,12 +85,25 @@ static bool timed() { return TCS[tc_game].move_ms == 0; }
 
 // UCI: driven over USB (the board shows the game, touch moves are off).
 enum Phase { HUMAN, ENGINE, OVER, UCI };
-static Board game;
+// UI-side buffers that are not speed critical live in PSRAM, allocated at
+// the start of setup(): internal SRAM is kept for the NNUE (one 96 KB block),
+// the TT and the engine. (The CoreS3's quad-PSRAM build of arduino-esp32 3.x
+// starts PSRAM after static initialisation, so not earlier than setup().)
+template <class T>
+static T* psram_new(size_t n = 1) {
+  return static_cast<T*>(heap_caps_calloc(n, sizeof(T), MALLOC_CAP_SPIRAM));
+}
+
+// The game (what the screen shows; the engine searches its own copy) is
+// allocated in setup() too: its 16.6 KB of internal SRAM go to the TT.
+static Board* game_ptr;
+#define game (*game_ptr)
 static int human = ::WHITE;
 static bool flipped = false;
 static Phase phase = HUMAN;
 static int32_t clock_ms[2];
-static int32_t clock_hist[MAX_GAME][2];  // clocks at the start of each ply
+typedef int32_t ClockPair[2];
+static ClockPair* clock_hist;  // clocks at the start of each ply
 static int start_ply;                    // take back stops here (set-up positions)
 static u32 turn_start;
 static char result[2][24];  // two lines
@@ -146,7 +160,8 @@ static volatile int eng_score;  // the finished search's score, side to move's v
 // UCI info lines from the engine task, printed by loop() so that all serial
 // output comes from one task (single producer / single consumer ring).
 enum { INFO_SLOTS = 8, INFO_LEN = 400 };
-static char info_ring[INFO_SLOTS][INFO_LEN];
+typedef char InfoLine[INFO_LEN];
+static InfoLine* info_ring;
 static volatile u32 info_head, info_tail;
 
 u32 engine_now_ms() { return millis(); }
@@ -932,6 +947,18 @@ static void dump_frame() {
   usb_print("\nEND FRAME\n");
 }
 
+// Boot report: setup() runs while the PC's USB connection is still coming
+// up, so its lines are kept here too and the serial command "info" repeats
+// them with the current memory figures.
+static char boot_log[640];
+
+static void boot_note(const char* what) {
+  size_t n = strlen(boot_log);
+  snprintf(boot_log + n, sizeof boot_log - n, "%-12s internal free %3u KB, largest %3u KB\n", what,
+           unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+}
+
 // ---- UCI over USB ----
 
 // All output goes through usb_out (not Serial.print), see usb_out.cpp.
@@ -1050,6 +1077,9 @@ static void serial_line(char* line) {
   } else if ((!strcmp(line, "b") || !strcmp(line, "s")) && phase != ENGINE && !eng_busy) {
     memcpy(&eng_board, &game, sizeof game);
     engine_command(line[0]);
+  } else if (!strcmp(line, "info")) {
+    usb_print(boot_log);
+    boot_note("now");
   } else if (!strcmp(line, "touchlog")) {
     touch_log = !touch_log;
     usb_printf("touch log %s\n", touch_log ? "on" : "off");
@@ -1057,13 +1087,14 @@ static void serial_line(char* line) {
 }
 
 static void serial_command() {
-  static char buf[8192];  // "position startpos moves ..." can be long
+  enum { SERIAL_LINE_BYTES = 8192 };  // "position startpos moves ..." can be long
+  static char* buf = psram_new<char>(SERIAL_LINE_BYTES);  // first call: after setup()
   static int n = 0;
   while (Serial.available()) {
     int c = Serial.read();
     if (c == '\r') continue;
     if (c != '\n') {
-      if (n < int(sizeof buf) - 1) buf[n++] = char(c);
+      if (n < SERIAL_LINE_BYTES - 1) buf[n++] = char(c);
       continue;
     }
     buf[n] = 0;
@@ -1081,27 +1112,69 @@ void setup() {
   M5.begin(cfg);
   // The default 256-byte receive buffer overflowed on long UCI "position ...
   // moves" lines arriving while the screen redraws (bytes lost, newline too).
-  Serial.setRxBufferSize(16384);
+  // 8 KB holds a 300-ply game's "position startpos moves ..." five times over.
+  Serial.setRxBufferSize(8192);
   Serial.begin(115200);  // input only; output goes through usb_out
+  esp_log_level_set("*", ESP_LOG_NONE);  // nothing else may write to the UCI stream
   usb_out_begin();
+  game_ptr = psram_new<Board>();
+  clock_hist = psram_new<ClockPair>(MAX_GAME);
+  info_ring = psram_new<InfoLine>(INFO_SLOTS);
+  if (!game_ptr || !clock_hist || !info_ring) usb_println("PSRAM allocation failed");
   M5.Speaker.setVolume(80);
   frame.setPsram(true);
   frame.setColorDepth(16);
   frame.createSprite(SCREEN_W, SCREEN_H);
+  boot_note("start");
 
-  // Internal SRAM, biggest contiguous block first: the net (96 KB in one
-  // piece), then the TT (64 KB, or 32 KB if that no longer fits), then the
-  // engine task's stack. Without room for the net the board plays PeSTO.
-  load_net();
-  size_t tt_bytes = TT_BYTES;
-  void* mem = heap_caps_malloc(tt_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  if (!mem) mem = heap_caps_malloc(tt_bytes /= 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  tt.init(mem, tt_bytes);
+  // Internal SRAM. The TT comes first, as big as leaves one block for the
+  // net's weights (96 KB in one piece) and room for its accumulators, the
+  // engine task's stack and 24 KB for the system; taken after the net it got
+  // only 16 KB on IDF 5 (the net splits the big block). Then the engine
+  // task (its 16 KB stack from a smaller region), then the net (PeSTO only
+  // without it).
+  enum { ENGINE_STACK = 16 * 1024, NET_WEIGHTS = 97 * 1024, NET_TOTAL = 115 * 1024 };
+  // The engine task's stack first, so it comes from one of the small heap
+  // regions rather than the big block the net needs.
+  static StaticTask_t eng_tcb;
+  StackType_t* eng_stack = (StackType_t*)heap_caps_malloc(ENGINE_STACK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  boot_note(eng_stack ? "engine stack" : "NO STACK");
+  size_t tt_bytes = 128 * 1024;
+  void* mem = nullptr;
+  for (; tt_bytes >= 8 * 1024; tt_bytes /= 2) {
+    mem = heap_caps_malloc(tt_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mem && heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= NET_WEIGHTS &&
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= NET_TOTAL + 24 * 1024)
+      break;
+    heap_caps_free(mem);
+    mem = nullptr;
+  }
+  tt.init(mem, mem ? tt_bytes : 0);
+  {
+    char t[24];
+    snprintf(t, sizeof t, "TT %u KB", mem ? unsigned(tt_bytes >> 10) : 0);
+    boot_note(t);
+  }
   search_init(&tt);  // before anything (new_game) uses the TT - not in the engine task
-  disableCore0WDT();  // the engine keeps core 0 busy while it thinks
-  if (xTaskCreatePinnedToCore(engine_loop, "engine", 16 * 1024, nullptr, 1, &eng_task, 0) != pdPASS)
-    usb_println("engine task not created: out of internal SRAM");
-  usb_printf("TT %u KB\n", unsigned(tt_bytes >> 10));
+  // The engine keeps core 0 busy while it thinks: stop watching its idle task.
+#if ESP_IDF_VERSION_MAJOR >= 5
+  // (disableCore0WDT() on IDF 5 leaves the idle hook feeding a watchdog it
+  // was removed from - an error line every tick.)
+  esp_task_wdt_config_t wdt = {};
+  wdt.timeout_ms = 5000;
+  wdt.idle_core_mask = 1 << 1;
+  wdt.trigger_panic = false;
+  esp_task_wdt_reconfigure(&wdt);
+#else
+  disableCore0WDT();
+#endif
+  if (eng_stack)
+    eng_task = xTaskCreateStaticPinnedToCore(engine_loop, "engine", ENGINE_STACK, nullptr, 1, eng_stack,
+                                             &eng_tcb, 0);
+  if (!eng_task) usb_println("engine task not created: out of internal SRAM");
+  boot_note(eng_task ? "engine task" : "NO ENGINE");
+  load_net();
+  boot_note(nnue_ok ? "NNUE loaded" : "NNUE FAILED");
 
   prefs.begin("cstretro", false);
   tc_index = prefs.getInt("tc", DEFAULT_TC);

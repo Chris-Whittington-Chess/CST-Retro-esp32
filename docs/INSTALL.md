@@ -45,7 +45,7 @@ then, with your board's image and port:
 esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.1-ws7.bin
 ```
 
-(Older esptool versions spell it `esptool.py ... write_flash`.) It takes
+(The current images: `cst-retro-0.1.1-ws7.bin`, `cst-retro-0.1.2-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
 about 10 seconds; the board restarts into the game.
 
 ### From the browser
@@ -63,10 +63,10 @@ command line), in a clone of this repo:
 pio run -e ws7 -t upload --upload-port COM5
 ```
 
-Use `-e cores3` for the CoreS3. The `ws7` env uses the pioarduino platform
-(arduino-esp32 3.x), downloaded on the first build. On Windows build `ws7`
-from PowerShell or cmd, not Git Bash/MSYS (ESP-IDF's tool installer refuses
-to run there).
+Use `-e cores3` for the CoreS3. Both use the pioarduino platform
+(arduino-esp32 3.x), downloaded on the first build. On Windows build from
+PowerShell or cmd, not Git Bash/MSYS (ESP-IDF's tool installer refuses to
+run there).
 
 ## 3. Check it
 

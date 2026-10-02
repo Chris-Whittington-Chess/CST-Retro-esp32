@@ -9,12 +9,12 @@ boot_app0 and the app in one file) and dist/manifest-<board>.json for a
 browser installer (ESP Web Tools). Flash with:
     esptool --chip esp32s3 write-flash 0x0 dist/cst-retro-<version>-<board>.bin
 
-ws7 (arduino-esp32 3.x) already builds the merged image (firmware.factory.bin);
-cores3 (arduino-esp32 2.0.17) is merged here with esptool.
+Both boards build on arduino-esp32 3.x (pioarduino), which makes the merged
+image itself (firmware.factory.bin); this copies it under a release name and
+writes the manifest.
 """
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -38,23 +38,10 @@ for board in boards:
         sys.exit(f"unknown board {board}: one of {', '.join(BOARDS)}")
     build = ROOT / ".pio" / "build" / board
     out = DIST / f"cst-retro-{version}-{board}.bin"
-    factory = build / "firmware.factory.bin"
-    if board == "ws7":
-        if not factory.exists():
-            sys.exit(f"missing {factory} - build first: pio run -e ws7")
-        shutil.copyfile(factory, out)
-    else:
-        boot_app0 = next(FRAMEWORKS.glob("framework-arduinoespressif32*/tools/partitions/boot_app0.bin"), None)
-        parts = [("0x0", build / "bootloader.bin"), ("0x8000", build / "partitions.bin"),
-                 ("0xe000", boot_app0), ("0x10000", build / "firmware.bin")]
-        for _, f in parts:
-            if not f or not f.exists():
-                sys.exit(f"missing {f} - build first: pio run -e {board}")
-        cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge_bin", "-o", str(out),
-               "--flash_mode", "keep", "--flash_freq", "keep", "--flash_size", "keep"]  # underscores: esptool 4 and 5
-        for off, f in parts:
-            cmd += [off, str(f)]
-        subprocess.run(cmd, check=True)
+    factory = build / "firmware.factory.bin"  # the merged image the build makes
+    if not factory.exists():
+        sys.exit(f"missing {factory} - build first: pio run -e {board}")
+    shutil.copyfile(factory, out)
     manifest = {
         "name": f"CST Retro - {BOARDS[board]}",
         "version": version,
