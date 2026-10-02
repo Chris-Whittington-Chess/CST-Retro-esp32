@@ -21,11 +21,19 @@ small-machine design: 32-bit CPU, ~300 KB internal SRAM, PSRAM for the big stuff
 | Hash | 128 KB TT in internal SRAM | a PSRAM TT costs ~10x per probe (search 75 vs 54 knps) |
 | Book | Jeroen.bin (Jeroen Noomen), 668 KB in flash | weighted random choice |
 
+## Install
+
+Ready-to-flash images per board are in `dist/`; see
+[docs/INSTALL.md](docs/INSTALL.md) for flashing with esptool, building from
+source, and what a port to another screen involves.
+
 ## Targets
 
+- `ws7` - the game on the Waveshare ESP32-S3-Touch-LCD-7 (ESP32-S3, 8 MB OPI PSRAM, 16 MB
+  flash, 800x480 RGB panel, GT911 touch), flashed through its USB socket. Built on
+  arduino-esp32 3.x (pioarduino) for the RGB driver's bounce buffers.
 - `cores3` - the game on the M5Stack CoreS3 (ESP32-S3, 240 MHz, 8 MB PSRAM, 320x240 touch), COM3.
 - `cores3-bench` / `cores3-prof` - engine benchmarks (perft, search bench, cycle counters).
-- later: a 4" board (ESP32-S3 or P4).
 
 ## Build
 
@@ -115,5 +123,6 @@ Device notes:
 
 - PeSTO evaluation tables: Ronald Friederich (Rofchade), via chessprogramming.org.
 - Opening book `data/Jeroen.bin`: Jeroen Noomen (Rebel), freely distributed.
-- Piece images rendered from DejaVu Sans (Bitstream Vera licence).
+- Piece images: CoreS3 rendered from DejaVu Sans (Bitstream Vera licence); 7" board the
+  "cburnett" set by Colin M.L. Burnett (BSD licence, `tools/pieces/cburnett`).
 - Polyglot Zobrist keys: the standard Polyglot book format.
