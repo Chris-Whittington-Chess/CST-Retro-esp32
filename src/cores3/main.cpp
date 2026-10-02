@@ -611,7 +611,7 @@ static void menu_label(int i, char* out) {
       snprintf(out, 48, "Evaluation: %s", !nnue_ok ? "PeSTO (no net)" : use_nnue ? "NNUE" : "PeSTO");
       break;
     case 6: snprintf(out, 48, "Flip board"); break;
-    case 7: snprintf(out, 48, "End game: resign / claim win / draw"); break;
+    case 7: snprintf(out, 48, "Resign / claim win / draw"); break;
     default: snprintf(out, 48, "Close"); break;
   }
 }
@@ -621,7 +621,7 @@ static void draw_menu() {
   frame.setFont(&fonts::FreeSansBold9pt7b);
   frame.setTextColor(ACTIVE);
   frame.setTextDatum(top_center);
-  frame.drawString(menu_page ? "End the game" : "Chess System Tal Retro", SCREEN_W / 2, 8);
+  frame.drawString(menu_page ? "Finish this game" : "Chess System Tal Retro", SCREEN_W / 2, 8);
   for (int i = 0; i < menu_items(); i++) {
     char label[48];
     menu_label(i, label);
