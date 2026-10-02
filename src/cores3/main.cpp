@@ -111,7 +111,7 @@ static bool use_nnue;       // menu / UCI choice (saved in NVS from the menu)
 static EvalMode last_mode = EVAL_PESTO;
 static bool human_clock = true;  // menu: your clock counts down (off: only the engine's runs)
 static u32 menu_opened_at;
-static int menu_page;  // 0 the menu, 1 "End game": resign / claim win / agree draw
+static int menu_page;  // 0 the menu, 1 finish the game: resign / claim win / agree draw
 
 static bool clock_runs(int side) { return side != human || human_clock; }
 
@@ -588,7 +588,13 @@ enum { END_ITEMS = 4 };
 
 static bool game_on() { return phase == HUMAN || phase == ENGINE; }
 
-static int menu_items() { return menu_page ? END_ITEMS : MENU_ITEMS; }
+// Resign / claim win / draw (item 7) is for board play only: under UCI the
+// GUI or cutechess adjudicates, so the item is not shown at all.
+enum { FINISH_ITEM = 7 };
+
+static int menu_items() { return menu_page ? END_ITEMS : MENU_ITEMS - (phase == UCI); }
+
+static int menu_item_id(int i) { return phase == UCI && i >= FINISH_ITEM ? i + 1 : i; }
 
 static void menu_label(int i, char* out) {
   if (menu_page) {
@@ -597,7 +603,7 @@ static void menu_label(int i, char* out) {
     snprintf(out, 48, "%s%s", END[i], i < 3 && !game_on() ? " (no game on)" : "");
     return;
   }
-  switch (i) {
+  switch (menu_item_id(i)) {
     case 0:
       snprintf(out, 48, phase == UCI ? "Leave UCI - play from here" : "New game - play White");
       break;
@@ -684,7 +690,7 @@ static void tap_menu(int x, int y) {
     dirty = true;
     return;
   }
-  switch (i) {
+  switch (menu_item_id(i)) {
     case 0:
       set_menu(false);
       if (phase == UCI) play_from_here();

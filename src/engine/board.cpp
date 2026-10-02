@@ -360,9 +360,10 @@ Move parse_uci(Board& b, const char* s) {
   return 0;
 }
 
-// Move lists go on one shared stack, not the task stack: the ESP32 Arduino
-// loop task has only 8 KB, and a 1 KB list per ply overflowed it at depth 6.
-static Move move_stack[MOVE_STACK_SIZE];
+// Move lists go on one stack on the heap, not the task stack: the ESP32
+// Arduino loop task has only 8 KB, and a 1 KB list per ply overflowed it at
+// depth 6. Allocated per call rather than static: perft is only a test and
+// benchmark, and on the 7" board those 16 KB of internal SRAM go to the TT.
 
 static u64 perft_at(Board& b, int depth, Move* moves) {
   int n = b.gen(moves);
@@ -378,5 +379,8 @@ static u64 perft_at(Board& b, int depth, Move* moves) {
 
 u64 perft(Board& b, int depth) {
   if (depth < 1 || depth > MAX_PERFT_DEPTH) return 0;
-  return perft_at(b, depth, move_stack);
+  Move* move_stack = new Move[MOVE_STACK_SIZE];
+  u64 nodes = perft_at(b, depth, move_stack);
+  delete[] move_stack;
+  return nodes;
 }

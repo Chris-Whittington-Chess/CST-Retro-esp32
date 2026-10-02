@@ -106,7 +106,7 @@ static bool lcd_begin() {
   cfg.timings.pclk_hz = 16 * 1000 * 1000;
   cfg.bits_per_pixel = 16;
   cfg.num_fbs = 1;
-  cfg.bounce_buffer_size_px = SCREEN_W * 10;
+  cfg.bounce_buffer_size_px = SCREEN_W * 8;  // 2 x 12.5 KB internal; must divide the frame
   cfg.dma_burst_size = 64;
 #else
   // IDF 4.4 (no bounce buffers): the DMA reads PSRAM directly and glitches
@@ -241,12 +241,22 @@ static bool timed() { return TCS[tc_game].move_ms == 0; }
 
 // UCI: driven over USB (the board shows the game, touch moves are off).
 enum Phase { HUMAN, ENGINE, OVER, UCI };
-static Board game;
+// UI-side data that is not speed critical lives in PSRAM: internal SRAM is
+// kept for the NNUE (one 96 KB block), the TT and the display's bounce
+// buffers. (The IDF 5 libraries can't place .bss in PSRAM, so these are
+// allocated during static initialisation - PSRAM is up by then.)
+template <class T>
+static T* psram_new(size_t n = 1) {
+  return static_cast<T*>(heap_caps_calloc(n, sizeof(T), MALLOC_CAP_SPIRAM));
+}
+
+static Board& game = *psram_new<Board>();
 static int human = ::WHITE;
 static bool flipped = false;
 static Phase phase = HUMAN;
 static int32_t clock_ms[2];
-static int32_t clock_hist[MAX_GAME][2];  // clocks at the start of each ply
+typedef int32_t ClockPair[2];
+static ClockPair* clock_hist = psram_new<ClockPair>(MAX_GAME);  // clocks at the start of each ply
 static int start_ply;                    // take back stops here (set-up positions)
 static u32 turn_start;
 static char result[2][24];  // two lines
@@ -268,7 +278,7 @@ static bool use_nnue;       // menu / UCI choice (saved in NVS from the menu)
 static EvalMode last_mode = EVAL_PESTO;
 static bool human_clock = true;  // menu: your clock counts down (off: only the engine's runs)
 static u32 menu_opened_at;
-static int menu_page;  // 0 the menu, 1 "End game": resign / claim win / agree draw
+static int menu_page;  // 0 the menu, 1 finish the game: resign / claim win / agree draw
 
 static bool clock_runs(int side) { return side != human || human_clock; }
 
@@ -287,7 +297,8 @@ static volatile bool eng_uci;  // the running search answers a UCI "go"
 // UCI info lines from the engine task, printed by loop() so that all serial
 // output comes from one task (single producer / single consumer ring).
 enum { INFO_SLOTS = 8, INFO_LEN = 400 };
-static char info_ring[INFO_SLOTS][INFO_LEN];
+typedef char InfoLine[INFO_LEN];
+static InfoLine* info_ring = psram_new<InfoLine>(INFO_SLOTS);
 static volatile u32 info_head, info_tail;
 
 u32 engine_now_ms() { return millis(); }
@@ -765,7 +776,13 @@ enum { END_ITEMS = 4 };
 
 static bool game_on() { return phase == HUMAN || phase == ENGINE; }
 
-static int menu_items() { return menu_page ? END_ITEMS : MENU_ITEMS; }
+// Resign / claim win / draw (item 7) is for board play only: under UCI the
+// GUI or cutechess adjudicates, so the item is not shown at all.
+enum { FINISH_ITEM = 7 };
+
+static int menu_items() { return menu_page ? END_ITEMS : MENU_ITEMS - (phase == UCI); }
+
+static int menu_item_id(int i) { return phase == UCI && i >= FINISH_ITEM ? i + 1 : i; }
 
 static void menu_label(int i, char* out) {
   if (menu_page) {
@@ -774,7 +791,7 @@ static void menu_label(int i, char* out) {
     snprintf(out, 48, "%s%s", END[i], i < 3 && !game_on() ? " (no game on)" : "");
     return;
   }
-  switch (i) {
+  switch (menu_item_id(i)) {
     case 0:
       snprintf(out, 48, phase == UCI ? "Leave UCI - play from here" : "New game - play White");
       break;
@@ -886,7 +903,7 @@ static void tap_menu(int x, int y) {
     dirty = true;
     return;
   }
-  switch (i) {
+  switch (menu_item_id(i)) {
     case 0:
       set_menu(false);
       if (phase == UCI) play_from_here();
@@ -1053,6 +1070,18 @@ static void dump_frame() {
   usb_print("\nEND FRAME\n");
 }
 
+// Boot report: setup() runs while the PC's USB connection is still coming
+// up, so its lines are kept here too and the serial command "info" repeats
+// them with the current memory figures.
+static char boot_log[640];
+
+static void boot_note(const char* what) {
+  size_t n = strlen(boot_log);
+  snprintf(boot_log + n, sizeof boot_log - n, "%-12s internal free %3u KB, largest %3u KB\n", what,
+           unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+}
+
 // ---- UCI over USB ----
 
 // All output goes through usb_out (not Serial.print), see usb_out.cpp.
@@ -1169,6 +1198,11 @@ static void serial_line(char* line) {
   } else if ((!strcmp(line, "b") || !strcmp(line, "s")) && phase != ENGINE && !eng_busy) {
     memcpy(&eng_board, &game, sizeof game);
     engine_command(line[0]);
+  } else if (!strcmp(line, "info")) {
+    usb_print(boot_log);
+    usb_printf("eval %s, PSRAM free %u KB\n", use_nnue && nnue_ok ? "NNUE" : "PeSTO",
+               unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    boot_note("now");
   } else if (!strcmp(line, "touchlog")) {
     touch_log = !touch_log;
     usb_printf("touch log %s\n", touch_log ? "on" : "off");
@@ -1176,13 +1210,14 @@ static void serial_line(char* line) {
 }
 
 static void serial_command() {
-  static char buf[8192];  // "position startpos moves ..." can be long
+  enum { SERIAL_LINE_BYTES = 8192 };  // "position startpos moves ..." can be long
+  static char* buf = psram_new<char>(SERIAL_LINE_BYTES);
   static int n = 0;
   while (Serial.available()) {
     int c = Serial.read();
     if (c == '\r') continue;
     if (c != '\n') {
-      if (n < int(sizeof buf) - 1) buf[n++] = char(c);
+      if (n < SERIAL_LINE_BYTES - 1) buf[n++] = char(c);
       continue;
     }
     buf[n] = 0;
@@ -1198,10 +1233,36 @@ static void serial_command() {
 void setup() {
   // The default 256-byte receive buffer overflowed on long UCI "position ...
   // moves" lines arriving while the screen redraws (bytes lost, newline too).
-  Serial.setRxBufferSize(16384);
+  // 8 KB holds a 300-ply game's "position startpos moves ..." five times over.
+  Serial.setRxBufferSize(8192);
   Serial.begin(115200);  // input only; output goes through usb_out
   esp_log_level_set("*", ESP_LOG_NONE);  // nothing else may write to the UCI stream
   usb_out_begin();
+  if (!&game || !clock_hist || !info_ring) usb_println("PSRAM allocation failed");
+  boot_note("start");
+
+  // Internal SRAM, biggest contiguous blocks first: the net (96 KB in one
+  // piece, PeSTO only without it), then the biggest TT that leaves room for
+  // the display's bounce buffers (2 x 12.5 KB), the engine task's stack and
+  // 24 KB for the system, then those.
+  load_net();
+  boot_note(nnue_ok ? "NNUE loaded" : "NNUE FAILED");
+  enum { ENGINE_STACK = 16 * 1024, LATER = 2 * 13 * 1024 + ENGINE_STACK + 24 * 1024 };
+  size_t tt_bytes = 128 * 1024;
+  void* mem = nullptr;
+  for (; tt_bytes >= 8 * 1024; tt_bytes /= 2) {
+    mem = heap_caps_malloc(tt_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mem && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= LATER) break;
+    heap_caps_free(mem);
+    mem = nullptr;
+  }
+  tt.init(mem, mem ? tt_bytes : 0);
+  {
+    char t[24];
+    snprintf(t, sizeof t, "TT %u KB", mem ? unsigned(tt_bytes >> 10) : 0);
+    boot_note(t);
+  }
+
   board_begin();  // USB selected, LCD and touch out of reset
   frame.setPsram(true);
   frame.setColorDepth(16);
@@ -1209,13 +1270,9 @@ void setup() {
   frame.fillScreen(TFT_BLACK);
   bool lcd_ok = lcd_begin();
   if (lcd_ok) lcd_push(0, 0, SCREEN_W, SCREEN_H);
+  boot_note(lcd_ok ? "LCD ok" : "LCD FAILED");
   exio_write(exio | EXIO_BL);
 
-  // Internal SRAM, biggest contiguous block first: the net (96 KB in one
-  // piece), then the engine task's stack, then the biggest TT that still
-  // leaves 32 KB for the system. Without room for the net the board plays
-  // PeSTO.
-  load_net();
   // The engine keeps core 0 busy while it thinks: stop watching its idle task.
 #if ESP_IDF_VERSION_MAJOR >= 5
   // (disableCore0WDT() on IDF 5 leaves the idle hook feeding a watchdog it
@@ -1228,17 +1285,9 @@ void setup() {
 #else
   disableCore0WDT();
 #endif
-  if (xTaskCreatePinnedToCore(engine_loop, "engine", 16 * 1024, nullptr, 1, &eng_task, 0) != pdPASS)
+  if (xTaskCreatePinnedToCore(engine_loop, "engine", ENGINE_STACK, nullptr, 1, &eng_task, 0) != pdPASS)
     usb_println("engine task not created: out of internal SRAM");
-  size_t tt_bytes = 128 * 1024;
-  void* mem = nullptr;
-  for (; tt_bytes >= 16 * 1024; tt_bytes /= 2) {
-    mem = heap_caps_malloc(tt_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (mem && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= 32 * 1024) break;
-    heap_caps_free(mem);
-    mem = nullptr;
-  }
-  tt.init(mem, mem ? tt_bytes : 0);
+  boot_note(eng_task ? "engine task" : "NO ENGINE");
   search_init(&tt);  // before anything (new_game) uses the TT - not in the engine task
   usb_printf("LCD %s, TT %u KB\n", lcd_ok ? "ok" : "FAILED", mem ? unsigned(tt_bytes >> 10) : 0);
 
