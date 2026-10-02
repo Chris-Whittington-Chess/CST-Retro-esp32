@@ -1,10 +1,12 @@
 // Chess System Tal Retro - board, make/unmake, move generation.
 //
 // Small-machine design for the ESP32 (32-bit, little SRAM): a 0x88 mailbox
-// with piece lists instead of 64-bit bitboards and magic tables.
+// with piece lists (movegen88.cpp). Built with -DBITBOARD, the same Board
+// keeps 64-bit bitboards instead of the lists (movegen_bb.cpp) - an
+// experiment to compare the two on a 32-bit CPU. Either way:
 //   square  = rank * 16 + file, A1 = 0, H8 = 0x77; (sq & 0x88) != 0 = off board
+//             (moves and the mailbox use these; bitboards use 0..63)
 //   piece   = color << 3 | type, WHITE = 0, PAWN..KING = 0..5, EMPTY = 7
-//   list[c] = squares of color c's pieces, king always at index 0
 // The game history doubles as the search stack, so take back = unmake.
 #pragma once
 #include <stdint.h>
@@ -59,10 +61,18 @@ struct Undo {
 };
 
 struct Board {
-  u8 sq[128];      // piece per square
+  u8 sq[128];  // piece per square
+#ifdef BITBOARD
+  u64 bb[16];  // squares (0..63) of each piece code
+  u64 occ[2];  // all squares of each colour
+  u8 ksq[2];   // king squares (0x88)
+  int king_sq(int c) const { return ksq[c]; }
+#else
   u8 idx[128];     // index of that piece in list[color]
   u8 list[2][16];  // piece squares, king first
   u8 count[2];
+  int king_sq(int c) const { return list[c][0]; }
+#endif
   u8 stm, castle, ep;  // ep: target square, NO_SQ unless a capture is possible
   u8 rule50;
   u64 key;  // Polyglot Zobrist key
@@ -78,18 +88,22 @@ struct Board {
   void make_null();
   void unmake_null();
   bool attacked(int s, int by) const;
-  bool in_check() const { return attacked(list[stm][0], stm ^ 1); }
+  bool in_check() const { return attacked(king_sq(stm), stm ^ 1); }
   // Pseudo-legal moves (may leave the king in check); returns the count.
   // quiets = false: captures and promotions only.
   int gen(Move* out, bool quiets = true) const;
   // Legal moves only (make + check + unmake each).
   int gen_legal(Move* out);
   // The side that just moved left its king attacked.
-  bool illegal() const { return attacked(list[stm ^ 1][0], stm); }
+  bool illegal() const { return attacked(king_sq(stm ^ 1), stm); }
   // Same as illegal() just after make(m), but cheap: only king moves, en
   // passant, check evasions and pieces on a line with their king are tested.
   bool leaves_check(Move m, bool was_in_check) const;
   u64 compute_key() const;
+  // Colour c has a piece other than pawns and the king.
+  bool has_non_pawn(int c) const;
+  // Neither side can mate (K v K, K+minor v K).
+  bool no_mating_material() const;
 
  private:
   // KEY = false (unmake): the key is restored from history afterwards.

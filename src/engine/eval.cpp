@@ -165,15 +165,4 @@ int evaluate(const Board& b) {
   return (unpack_mg(d) * mgp + unpack_eg(d) * (24 - mgp)) / 24;
 }
 
-bool insufficient_material(const Board& b) {
-  int n = b.count[WHITE] + b.count[BLACK];
-  if (n == 2) return true;
-  if (n == 3) {
-    for (int c = 0; c < 2; c++)
-      for (int i = 1; i < b.count[c]; i++) {
-        int t = piece_type(b.sq[b.list[c][i]]);
-        if (t == KNIGHT || t == BISHOP) return true;
-      }
-  }
-  return false;
-}
+bool insufficient_material(const Board& b) { return b.no_mating_material(); }

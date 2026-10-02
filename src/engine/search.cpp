@@ -48,11 +48,6 @@ bool is_repetition(const Board& b) {
   return false;
 }
 
-bool has_non_pawn_material(const Board& b) {
-  for (int i = 1; i < b.count[b.stm]; i++)
-    if (piece_type(b.sq[b.list[b.stm][i]]) != PAWN) return true;
-  return false;
-}
 
 bool is_quiet(Move m) { return !(m & MF_CAPTURE) && !move_promo(m); }
 
@@ -195,7 +190,7 @@ int search(Board& b, int alpha, int beta, int depth, int ply, int base, bool nul
       return static_eval;
     // Null move.
     if (search_options.null_move && null_ok && depth >= 3 && static_eval >= beta &&
-        has_non_pawn_material(b)) {
+        b.has_non_pawn(b.stm)) {
       int r = 3 + depth / 4;
       b.make_null();
       int s = -search(b, -beta, -beta + 1, depth - 1 - r, ply + 1, base, false, false);
