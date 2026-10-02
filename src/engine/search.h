@@ -14,6 +14,7 @@ struct Limits {
   u64 nodes = 0;    // 0 = no limit
   u32 soft_ms = 0;  // don't start a new iteration after this (0 = none)
   u32 hard_ms = 0;  // abort the search at this (0 = none)
+  u64 soft_nodes = 0;  // don't start a new iteration after this many nodes (0 = none)
 };
 
 struct SearchReport {

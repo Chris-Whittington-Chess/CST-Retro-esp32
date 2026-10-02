@@ -379,6 +379,7 @@ SearchResult search(Board& b, const Limits& lim, ReportFn report) {
     }
     if (nlegal == 1) break;
     if (lim.soft_ms && engine_now_ms() - start_ms >= lim.soft_ms) break;
+    if (lim.soft_nodes && nodes >= lim.soft_nodes) break;
     if (score >= MATE_BOUND && MATE - score <= depth) break;  // found a mate we can't improve
   }
   r.nodes = nodes;

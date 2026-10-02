@@ -1,4 +1,4 @@
-﻿param([int]$batch = 1)  # -batch 2 for the second pool batch
+﻿param([int]$batch = 1, [int]$conc = 4, [int]$rounds = 2)  # -batch 2/3: later pool batches
 # 4 quick games per pool engine vs the CST Retro PC build under cutechess,
 # then a summary of results and terminations (crashes, illegal moves, time).
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -25,7 +25,23 @@ $pools = @{
   @('Pigeon-1.5.1', 'pigeon-1.5.1-windows\pigeon-1.5.1\pigeon-1.5.1.exe', 'uci'),
   @('Wowl-1.3.7', 'wowl-1.3.7.exe', 'uci'),
   @('Wowl-1.3.8', 'wowl-1.3.8.exe', 'uci'),
-  @('Snowy-0.2', 'snowy_0_2_bin_win64\snowy_0_2_x64.exe', 'uci'))
+  @('Snowy-0.2', 'snowy_0_2_bin_win64\snowy_0_2_x64.exe', 'uci'));
+ 3 = @(
+  @('Maxwell-3.1-3', 'Maxwell.v3.1.Patch.3.-.Windows.64-bit\maxwell-v3.1-3.exe', 'uci'),
+  @('Gunborg-1.35', 'gunborg1.35_w64m.exe', 'uci'),
+  @('Trinket-3.0.0', 'trinket-v3.0.0.exe', 'uci'),
+  @('Barbarossa-0.4.0', 'Barbarossa-0.4.0-w64.exe', 'uci'),
+  @('KhepriChess-4.0.1', 'kheprichess_4.0.1-win.exe', 'uci'),
+  @('Barbarossa-0.5.0', 'Barbarossa-0.5.0-win10-64.exe', 'uci'),
+  @('Dumb-1.3', 'dumb-windows\dumb-win64.exe', 'uci'),
+  @('Prophet-4.1', 'prophet4_1_windows\prophet4_1_windows\prophet4_1.exe', 'xboard'),
+  @('Tantabus-1.0.2', 'tantabus-windows-2019-x86-64-v2.exe', 'uci'),
+  @('Peacekeeper-1.10', 'peacekeeper-110.exe', 'uci'),
+  @('Barbarossa-0.6.0', 'Barbarossa-0.6.0.exe', 'uci'),
+  @('Altair-1.0.0', 'Altair_windows_64.exe', 'uci'),
+  @('Clarity-2.0.0', 'Clarity_2.0.0_Magic.exe', 'uci'),
+  @('byte-knight-3.0.0', 'byte-knight.exe-x86_64-pc-windows-msvc.exe', 'uci'),
+  @('Avalanche-0.2', 'Avalanche_x86_64_windows.exe', 'uci'))
 }
 $pool = $pools[$batch]
 New-Item -ItemType Directory -Force "$root\match\pool-check" | Out-Null
@@ -35,8 +51,8 @@ foreach ($e in $pool) {
   $log = "$root\match\pool-check\$($e[0]).log"
   & $cute -engine "name=$($e[0])" "cmd=$exe" "dir=$dir" "proto=$($e[2])" `
           -engine name=CSTRetro "cmd=$root\bin\cstretro-see.exe" proto=uci `
-          -each tc=5+0.05 -openings "file=$book" format=pgn order=random -games 2 -rounds 2 -repeat `
-          -concurrency 4 -pgnout "$root\match\pool-check\$($e[0]).pgn" -recover *> $log
+          -each tc=5+0.05 -openings "file=$book" format=pgn order=random -games 2 -rounds $rounds -repeat `
+          -concurrency $conc -pgnout "$root\match\pool-check\$($e[0]).pgn" -recover *> $log
   $score = (Select-String -Path $log -Pattern "^Score of" | Select-Object -Last 1).Line
   $bad = Select-String -Path $log -Pattern "illegal|disconnect|stalls|crash|loses on time|forfeit" |
          ForEach-Object { $_.Line.Trim() } | Select-Object -Unique

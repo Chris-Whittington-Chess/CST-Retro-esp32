@@ -33,10 +33,50 @@ void print_info(const SearchReport& r) {
   fflush(stdout);
 }
 
+// ---- emulating the board's speed (EmulateNPS) ----
+// The PC searches ~50x faster than the CoreS3, so plain time odds would mean
+// a few ms per move. Instead the engine keeps a virtual clock: a move costs
+// nodes / EmulateNPS seconds plus the board's USB overhead, and each move's
+// budget comes from that virtual clock (same time management as the board)
+// as node limits. The real clock barely moves; a real-time safety stop stays.
+static int emulate_nps;       // 0 = off
+static int hash_kb_override;  // HashKB option: TT size in KB, ignores Hash
+static int32_t vclock = -1;   // virtual ms left, -1 = take the first go's clock
+static int virtual_flags;
+enum { BOARD_OVERHEAD_MS = 50, BOARD_RESERVE_MS = 100 };
+
+static long go_arg(const char* line, const char* name, long def) {
+  size_t n = strlen(name);
+  for (const char* p = strstr(line, name); p; p = strstr(p + 1, name))
+    if ((p == line || p[-1] == ' ') && p[n] == ' ') return atol(p + n + 1);
+  return def;
+}
+
 static void go(const char* line) {
   Limits lim = uci_go(line, board.stm, 30);
+  long real_left = go_arg(line, board.stm == WHITE ? "wtime" : "btime", -1);
+  bool emulate = emulate_nps > 0 && real_left >= 0 && !strstr(line, "movetime");
+  int32_t inc = int32_t(go_arg(line, board.stm == WHITE ? "winc" : "binc", 0));
+  if (emulate) {
+    if (vclock < 0) vclock = int32_t(real_left);  // game start: the same base time
+    Limits v = clock_limits(vclock, inc, int(go_arg(line, "movestogo", 0)), BOARD_RESERVE_MS);
+    lim.soft_nodes = u64(v.soft_ms) * u64(emulate_nps) / 1000;
+    lim.nodes = u64(v.hard_ms) * u64(emulate_nps) / 1000;
+    if (lim.nodes < 1) lim.nodes = 1;
+    lim.soft_ms = 0;
+    lim.hard_ms = u32(real_left / 3 > 1 ? real_left / 3 : 1);  // real-time safety only
+  }
   search_stop = false;
   SearchResult r = search(board, lim, print_info);
+  if (emulate) {
+    int32_t spent = int32_t(r.nodes * 1000 / u64(emulate_nps)) + BOARD_OVERHEAD_MS;
+    vclock += inc - spent;
+    if (vclock <= 0) {
+      virtual_flags++;
+      printf("info string virtual flag #%d (the board would have lost on time)\n", virtual_flags);
+      vclock = 1;
+    }
+  }
   char best[6] = "0000";
   if (r.best) move_to_uci(r.best, best);
   printf("bestmove %s\n", best);
@@ -57,13 +97,21 @@ int uci_loop() {
       printf("option name Eval type combo default PeSTO var PeSTO var NNUE\n");
       printf("option name EvalFile type string default <none>\n");
       printf("option name SEE type check default true\n");
+      printf("option name HashKB type spin default 0 min 0 max 1048576\n");
+      printf("option name EmulateNPS type spin default 0 min 0 max 100000000\n");
       printf("uciok\n");
     } else if (!strcmp(line, "isready")) {
       printf("readyok\n");
     } else if (!strcmp(line, "ucinewgame")) {
       search_new_game();
+      vclock = -1;
     } else if (!strncmp(line, "setoption name Hash value ", 26)) {
-      set_hash(atoi(line + 26));
+      if (!hash_kb_override) set_hash(atoi(line + 26));
+    } else if (!strncmp(line, "setoption name HashKB value ", 28)) {
+      hash_kb_override = atoi(line + 28);  // wins over Hash, in either order (board: 32)
+      if (hash_kb_override > 0) set_hash_kb(hash_kb_override);
+    } else if (!strncmp(line, "setoption name EmulateNPS value ", 32)) {
+      emulate_nps = atoi(line + 32);
     } else if (!strncmp(line, "setoption name SEE value ", 25)) {
       bool on = !strcmp(line + 25, "true");  // all three SEE uses (A/B tests)
       search_options.see_order = search_options.see_qsearch = search_options.see_prune = on;
