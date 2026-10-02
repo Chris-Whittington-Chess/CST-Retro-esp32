@@ -8,7 +8,7 @@ image. Pick your board below; if it isn't listed, see
 | Board | Screen | Firmware image | PlatformIO env |
 |---|---|---|---|
 | Waveshare ESP32-S3-Touch-LCD-7 | 7", 800x480, capacitive touch | `cst-retro-<version>-ws7.bin` | `ws7` |
-| M5Stack CoreS3 | 2", 320x240, capacitive touch | `cst-retro-<version>-cores3.bin` (not built yet) | `cores3` |
+| M5Stack CoreS3 | 2", 320x240, capacitive touch | `cst-retro-<version>-cores3.bin` | `cores3` |
 
 The images are in [`dist/`](../dist). Each is the whole flash contents
 (bootloader, partition table and program, with the opening book and the
