@@ -97,6 +97,11 @@ NNUE v1: 7.09M quiet positions from 164k CStal-5 match games, labelled by
 CStal-5 at depth 6 (tools/nnue). On the CoreS3 it costs ~20% nps (PIE SIMD)
 and the TT drops to 32 KB to make room for the 96 KB of weights.
 
+Rating against a CCRL-anchored pool (docs/ENGINE-POOL.md): the PC build
+emulating the board's speed (NNUE, 52 knps, 32 KB TT) played two
+round-robins at 1+0.6 against 23 open-source engines rated 1516-2440 on
+CCRL 40/15: **about 2150 CCRL (95% 2079-2223)** over 78 games.
+
 Device notes:
 - Hot code in IRAM (IRAM_ATTR) made no difference: the loop already lives in
   the instruction cache.
