@@ -86,13 +86,14 @@ int uci_loop() {
 static void* nn_w;
 static void* nn_acc;
 
-static bool nnue_random(int n) {
+static bool nnue_random(int n, int h) {
   free(nn_w);
   free(nn_acc);
-  nn_w = malloc(nnue_weight_bytes(n));
+  nn_w = malloc(nnue_weight_bytes(n, h));
   nn_acc = malloc(nnue_acc_bytes(n));
-  if (!nnue_setup_random(n, 12345, nn_w, nn_acc)) {
-    printf("bad NNUE width %d (multiple of 8, <= %d)\n", n, int(NNUE_MAX_N));
+  if (!nnue_setup_random(n, h, 12345, nn_w, nn_acc)) {
+    printf("bad NNUE shape %d/%d (multiples of 8, <= %d/%d)\n", n, h, int(NNUE_MAX_N),
+           int(NNUE_MAX_H));
     return false;
   }
   return true;
@@ -114,8 +115,8 @@ static void check_walk(int depth) {
 
 // Incremental accumulators == full refresh at every node of depth-3 trees
 // (also exercises re-entering sibling lines after unmake), and null moves.
-int nnue_test(int n) {
-  if (!nnue_random(n)) return 1;
+int nnue_test(int n, int h) {
+  if (!nnue_random(n, h)) return 1;
   checked = mismatches = 0;
   for (const char* f : SEARCH_BENCH_FENS) {
     board.set_fen(f);
@@ -125,15 +126,15 @@ int nnue_test(int n) {
     check_walk(2);
     board.unmake_null();
   }
-  printf("nncheck N=%d: %llu positions, %llu mismatches\n", n, (unsigned long long)checked,
+  printf("nncheck 768->%d->%d: %llu positions, %llu mismatches\n", n, h, (unsigned long long)checked,
          (unsigned long long)mismatches);
   return mismatches != 0;
 }
 
 // The search bench with the NNUE computed at every node but PeSTO's score
 // returned: same tree as sbench, the time difference is the network's cost.
-int nnue_bench(int n, int depth, int hash_kb) {
-  if (!nnue_random(n)) return 1;
+int nnue_bench(int n, int h, int depth, int hash_kb) {
+  if (!nnue_random(n, h)) return 1;
   set_hash_kb(hash_kb);
   search_init(&tt);
   eval_mode = EVAL_NNUE_COST;
@@ -141,7 +142,7 @@ int nnue_bench(int n, int depth, int hash_kb) {
   u64 total = run_search_bench(board, depth);
   u32 ms = engine_now_ms() - t0;
   eval_mode = EVAL_PESTO;
-  printf("nnbench N=%d depth %d hash %d KB: %llu nodes, %u ms, %llu knps\n", n, depth, hash_kb,
+  printf("nnbench 768->%d->%d depth %d hash %d KB: %llu nodes, %u ms, %llu knps\n", n, h, depth, hash_kb,
          (unsigned long long)total, ms, (unsigned long long)(ms ? total / ms : 0));
   return 0;
 }

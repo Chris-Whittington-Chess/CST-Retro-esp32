@@ -4,10 +4,11 @@
 //   'b' perft bench   'p' perft.epd suite (checks <= 1M nodes)   'm' memory
 //   's' search bench depth 8, TT 4 MB in PSRAM
 //   'i' search bench depth 8, TT 64 KB in internal SRAM (PeSTO)
-//   '1'..'4' the same with a random-weight NNUE of width 32/64/128/256
-//            computed at every node (EVAL_NNUE_COST: PeSTO's tree, so the
-//            time difference is the network's cost); weights in internal
-//            SRAM when they fit, else PSRAM
+//   '1' '2' '3'  the same with a random-weight NNUE 768->32->1, 768->64->1,
+//                768->32->32->1 computed at every node (EVAL_NNUE_COST:
+//                PeSTO's tree, so the time difference is the network's
+//                cost), PIE SIMD kernels; '5' '6' '7' the same in plain C++
+//   '9'          NNUE self-test: SIMD == C++, incremental == refresh
 #include <M5Unified.h>
 #include "../engine/bench.h"
 #include "../engine/board.h"
@@ -117,31 +118,70 @@ static void search_bench(bool psram) {
   say("  engine stack free %u bytes", unsigned(uxTaskGetStackHighWaterMark(nullptr)));
 }
 
+// 16-byte aligned (the SIMD kernels need it), internal SRAM if possible.
 static void* alloc_prefer_internal(size_t bytes, const char** where) {
-  void* p = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  void* p = heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   *where = "internal";
   if (!p) {
-    p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    p = heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM);
     *where = "PSRAM";
   }
   return p;
 }
 
-static void nnue_bench(int n) {
+static void* nn_w;
+static void* nn_a;
+
+static bool nnue_load(int n, int h) {
+  heap_caps_free(nn_w);
+  heap_caps_free(nn_a);
   const char *wwhere, *awhere;
-  void* w = alloc_prefer_internal(nnue_weight_bytes(n), &wwhere);
-  void* a = alloc_prefer_internal(nnue_acc_bytes(n), &awhere);
-  if (!w || !a || !nnue_setup_random(n, 12345, w, a)) {
-    say("NNUE N=%d: no memory", n);
-  } else {
-    say("NNUE 768->%d: weights %u KB %s, acc %u KB %s", n, unsigned(nnue_weight_bytes(n) >> 10),
-        wwhere, unsigned(nnue_acc_bytes(n) >> 10), awhere);
-    eval_mode = EVAL_NNUE_COST;
-    search_bench(false);
-    eval_mode = EVAL_PESTO;
+  nn_w = alloc_prefer_internal(nnue_weight_bytes(n, h), &wwhere);
+  nn_a = alloc_prefer_internal(nnue_acc_bytes(n), &awhere);
+  if (!nn_w || !nn_a || !nnue_setup_random(n, h, 12345, nn_w, nn_a)) {
+    say("NNUE 768->%d->%d: no memory", n, h);
+    return false;
   }
-  free(w);
-  free(a);
+  say("NNUE 768->%d%s%s->1: weights %u KB %s, acc %u KB %s", n, h ? "->" : "",
+      h ? String(h).c_str() : "", unsigned(nnue_weight_bytes(n, h) >> 10), wwhere,
+      unsigned(nnue_acc_bytes(n) >> 10), awhere);
+  return true;
+}
+
+static void nnue_bench(int n, int h, bool simd) {
+  if (!nnue_load(n, h)) return;
+  nnue_set_simd(simd);
+  say("  kernels: %s", nnue_simd() ? "PIE SIMD" : "C++");
+  eval_mode = EVAL_NNUE_COST;
+  search_bench(false);
+  eval_mode = EVAL_PESTO;
+  nnue_set_simd(true);
+}
+
+// SIMD vs C++ kernels at every node of depth-3 trees, and incremental vs
+// full refresh, for each shape.
+static void nnue_selftest() {
+  static const int shapes[3][2] = {{32, 0}, {64, 0}, {32, 32}};
+  for (auto& sh : shapes) {
+    if (!nnue_load(sh[0], sh[1])) continue;
+    int bad = 0, nodes = 0;
+    for (const char* f : SEARCH_BENCH_FENS) {
+      board.set_fen(f);
+      bad += nnue_compare_paths(board, 2);
+      nodes++;
+    }
+    board.set_fen(SEARCH_BENCH_FENS[1]);
+    nnue_new_root(board);
+    int incr_bad = 0;
+    Move moves[MAX_MOVES];
+    int n = board.gen_legal(moves);
+    for (int i = 0; i < n; i++) {
+      board.make(moves[i]);
+      if (!nnue_check(board)) incr_bad++;
+      board.unmake();
+    }
+    say("  SIMD vs C++: %d mismatches; incremental vs refresh: %d", bad, incr_bad);
+  }
 }
 
 static void engine_loop(void*) {
@@ -154,7 +194,10 @@ static void engine_loop(void*) {
       if (c == 'm') memory_report();
       if (c == 's') search_bench(true);
       if (c == 'i') search_bench(false);
-      if (c >= '1' && c <= '4') nnue_bench(32 << (c - '1'));
+      if (c == '1' || c == '5') nnue_bench(32, 0, c == '1');
+      if (c == '2' || c == '6') nnue_bench(64, 0, c == '2');
+      if (c == '3' || c == '7') nnue_bench(32, 32, c == '3');
+      if (c == '9') nnue_selftest();
       command = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
