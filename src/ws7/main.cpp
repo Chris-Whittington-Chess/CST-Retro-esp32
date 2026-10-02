@@ -294,6 +294,22 @@ static volatile Move eng_move;
 static volatile int info_depth, info_score;
 static volatile bool eng_uci;  // the running search answers a UCI "go"
 
+// ---- notation and evals: SAN for the moves shown, the engine's score for
+// each of its moves (White's view). Both live in PSRAM, allocated in setup().
+enum : int32_t { EVAL_NONE = INT32_MIN, EVAL_BOOK = INT32_MIN + 1 };
+// Per ply: the position (key) and move a score belongs to, so a score only
+// shows while the game still has that move there - after take back or a new
+// "position" from the PC (UCI resends the whole game every move) the old
+// ply's score is not mistaken for the new one.
+struct PlyEval {
+  u64 key;
+  Move move;
+  int32_t score;  // EVAL_BOOK or the engine's score, White's view
+};
+static PlyEval* ply_eval;
+static Board* san_board;   // scratch copy of the game for working out SAN
+static volatile int eng_score;  // the finished search's score, side to move's view
+
 // UCI info lines from the engine task, printed by loop() so that all serial
 // output comes from one task (single producer / single consumer ring).
 enum { INFO_SLOTS = 8, INFO_LEN = 400 };
@@ -325,6 +341,7 @@ static void engine_loop(void*) {
     int c = eng_command;
     if (c == 'g') {
       SearchResult r = search(eng_board, eng_limits, on_report);
+      eng_score = r.score;
       eng_move = r.best;
       eng_done = true;
     } else if (c == 'b') {
@@ -419,6 +436,53 @@ static void start_engine() {
   engine_command('g');
 }
 
+static void clear_evals() {
+  if (ply_eval) memset(ply_eval, 0, MAX_GAME * sizeof(PlyEval));
+}
+
+// Record the score for move m, about to be made in the game's position.
+static void record_eval(Move m, int32_t score) {
+  if (ply_eval) ply_eval[game.hply] = {game.key, Move(m & 0x00FFFFFF), score};
+}
+
+// The score shown for the game's move at ply (EVAL_NONE: none, e.g. yours).
+static int32_t eval_at(int ply) {
+  if (!ply_eval || ply < 0 || ply >= game.hply) return EVAL_NONE;
+  const PlyEval& e = ply_eval[ply];
+  if (e.key != game.hist[ply].key || e.move != (game.hist[ply].move & 0x00FFFFFF)) return EVAL_NONE;
+  return e.score;
+}
+
+// The engine's score for the move about to be made (from its side's view).
+static int32_t white_view(int score) { return game.stm == ::WHITE ? score : -score; }
+
+// SAN of the last SAN_PLIES moves of the game, worked out on a copy (undone
+// to the first of them, then replayed) and cached until the game changes.
+enum { SAN_PLIES = 10 };
+static char san_text[SAN_PLIES][10];
+static int san_base, san_hply = -1;
+static u64 san_key;
+
+static void refresh_san() {
+  if (!san_board || (san_hply == game.hply && san_key == game.key)) return;
+  san_hply = game.hply;
+  san_key = game.key;
+  san_base = game.hply > SAN_PLIES ? game.hply - SAN_PLIES : 0;
+  memcpy(san_board, &game, sizeof(Board));
+  while (san_board->hply > san_base) san_board->unmake();
+  for (int p = san_base; p < game.hply; p++) {
+    Move m = game.hist[p].move & 0x00FFFFFF;
+    move_to_san(*san_board, m, san_text[p - san_base]);
+    san_board->make(m);
+  }
+}
+
+static const char* san_of(int ply) {
+  refresh_san();
+  if (!san_board || ply < san_base || ply >= game.hply) return "?";
+  return san_text[ply - san_base];
+}
+
 // ---------------------------------------------------------------- rules / game flow
 
 static void set_result(const char* a, const char* b) {
@@ -446,6 +510,7 @@ static void check_game_over() {
   else if (game.hply >= MAX_GAME - MAX_PLY - 2) set_result("Game too long", "Draw");
 }
 
+
 static void play(Move m, bool engine = false) {
   u32 now = millis();
   if (!engine) last_from_book = false;
@@ -459,6 +524,7 @@ static void play(Move m, bool engine = false) {
     if (game.stm == ::WHITE) usb_printf("%d. ", game.hply / 2 + 1);
     usb_printf("%s ", mv);
   }
+  if (engine) record_eval(m, last_from_book ? EVAL_BOOK : white_view(eng_score));
   game.make(m);
   last_move = m;
   turn_start = now;
@@ -480,6 +546,7 @@ static void play(Move m, bool engine = false) {
 static void new_game(int color) {
   stop_engine();
   game.set_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  clear_evals();
   search_new_game();
   tc_game = tc_index;
   human = color;
@@ -684,26 +751,33 @@ static void fmt_score(int s, char* out) {
 
 enum { STATUS_Y = TOP_CLOCK_Y + CLOCK_H + 12, PROMO_Y = STATUS_Y + 36, MOVES_Y = 214, MOVE_ROWS = 4 };
 
-// The last few moves, numbered from the first position the board knows.
+// The last few moves in SAN, numbered from the first position the board
+// knows, each engine move followed by its score (or "book").
 static void draw_moves() {
-  frame.setFont(&fonts::FreeSans12pt7b);
   frame.setTextDatum(top_left);
   int black_first = (game.stm ^ (game.hply & 1)) == ::BLACK;
   int first_row = 0, rows = (game.hply + black_first + 1) / 2;
   if (rows > MOVE_ROWS) first_row = rows - MOVE_ROWS;
   for (int row = first_row; row < rows; row++) {
     int y = MOVES_Y + (row - first_row) * 26;
-    char buf[12];
+    char buf[16];
     snprintf(buf, sizeof buf, "%d.", row + 1);
+    frame.setFont(&fonts::FreeSans12pt7b);
     frame.setTextColor(DIM);
-    frame.drawString(buf, PANEL_X + 12, y);
+    frame.drawString(buf, PANEL_X + 8, y);
     for (int c = 0; c < 2; c++) {
-      int ply = row * 2 + c - black_first;
+      int ply = row * 2 + c - black_first, x = PANEL_X + 50 + c * 130;
       if (ply < 0 || ply >= game.hply) continue;
-      char mv[6];
-      move_to_uci(game.hist[ply].move, mv);
+      frame.setFont(&fonts::FreeSans12pt7b);
       frame.setTextColor(ply == game.hply - 1 ? TEXT : DIM);
-      frame.drawString(mv, PANEL_X + 72 + c * 104, y);
+      frame.drawString(san_of(ply), x, y);
+      int32_t e = eval_at(ply);
+      if (e == EVAL_NONE) continue;
+      if (e == EVAL_BOOK) snprintf(buf, sizeof buf, "book");
+      else fmt_score(e, buf);
+      frame.setFont(&fonts::FreeSans9pt7b);
+      frame.setTextColor(DIM);
+      frame.drawString(buf, x + 80, y + 4);
     }
   }
 }
@@ -744,10 +818,8 @@ static void draw_status() {
     fmt_score(game.stm == ::WHITE ? info_score : -info_score, sc);
     snprintf(buf, sizeof buf, "depth %d   %s", info_depth, sc);
     line(DIM, buf);
-  } else if (last_move) {
-    char mv[6];
-    move_to_uci(last_move, mv);
-    snprintf(buf, sizeof buf, "%s %s", last_from_book ? "book" : "last", mv);
+  } else if (last_move && game.hply) {
+    snprintf(buf, sizeof buf, "%s %s", last_from_book ? "book" : "last", san_of(game.hply - 1));
     line(DIM, buf);
   } else {
     y += 30;
@@ -1136,6 +1208,7 @@ static void uci_done() {
   uci_send("bestmove %s", mv);
   eng_uci = false;
   if (m && game.hply < MAX_GAME - MAX_PLY - 2) {
+    record_eval(m, white_view(eng_score));
     game.make(m);
     last_move = m;
     beep();
@@ -1169,6 +1242,7 @@ static void serial_line(char* line) {
     uci_send("readyok");
   } else if (!strcmp(line, "ucinewgame")) {
     stop_engine();
+    clear_evals();
     search_new_game();
   } else if (!strncmp(line, "setoption name Eval value ", 26)) {
     use_nnue = nnue_ok && !strcmp(line + 26, "NNUE");
@@ -1294,6 +1368,8 @@ void setup() {
   prefs.begin("cstretro", false);
   tc_index = prefs.getInt("tc", DEFAULT_TC);
   if (tc_index < 0 || tc_index >= NUM_TCS) tc_index = DEFAULT_TC;
+  ply_eval = (PlyEval*)heap_caps_malloc(MAX_GAME * sizeof(PlyEval), MALLOC_CAP_SPIRAM);
+  san_board = (Board*)heap_caps_malloc(sizeof(Board), MALLOC_CAP_SPIRAM);
   use_book = prefs.getBool("book", true);
   human_clock = prefs.getBool("hclock", true);
   use_nnue = nnue_ok && prefs.getBool("nnue", true);

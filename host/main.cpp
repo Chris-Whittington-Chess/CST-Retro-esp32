@@ -177,6 +177,19 @@ int main(int argc, char** argv) {
   if (argc >= 2 && !strcmp(argv[1], "keytest")) return key_test();
   if (argc >= 3 && !strcmp(argv[1], "perft"))
     return run_epd(argv[2], argc >= 4 ? strtoull(argv[3], nullptr, 10) : ~0ull);
+  if (argc >= 3 && !strcmp(argv[1], "san")) {  // san "<fen>" [uci moves...]: each move in SAN
+    if (!board.set_fen(argv[2])) { printf("bad fen\n"); return 1; }
+    for (int i = 3; i < argc; i++) {
+      Move m = parse_uci(board, argv[i]);
+      if (!m) { printf("illegal %s\n", argv[i]); return 1; }
+      char san[10];
+      move_to_san(board, m, san);
+      printf("%s ", san);
+      board.make(m);
+    }
+    printf("\n");
+    return 0;
+  }
   if (argc >= 4 && !strcmp(argv[1], "divide")) {
     if (!board.set_fen(argv[2])) { printf("bad fen\n"); return 1; }
     Move moves[MAX_MOVES];

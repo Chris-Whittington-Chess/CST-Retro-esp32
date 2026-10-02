@@ -349,6 +349,48 @@ void move_to_uci(Move m, char* out) {
   out[n] = 0;
 }
 
+void move_to_san(Board& b, Move m, char* out) {
+  static const char LETTER[] = "PNBRQK";
+  m &= 0x00FFFFFF;  // history moves carry the moving piece in bits 24-27
+  int from = move_from(m), to = move_to(m), type = piece_type(b.sq[from]);
+  char* o = out;
+  Move moves[MAX_MOVES];
+  if (m & MF_CASTLE) {
+    const char* c = sq_file(to) > sq_file(from) ? "O-O" : "O-O-O";
+    while (*c) *o++ = *c++;
+  } else {
+    bool capture = b.sq[to] != EMPTY || (m & MF_EP);
+    if (type == PAWN) {
+      if (capture) *o++ = char('a' + sq_file(from));
+    } else {
+      *o++ = LETTER[type];
+      // another piece of the same type that can go to the same square
+      bool other = false, same_file = false, same_rank = false;
+      int n = b.gen_legal(moves);
+      for (int i = 0; i < n; i++) {
+        int f = move_from(moves[i]);
+        if (f == from || move_to(moves[i]) != to || piece_type(b.sq[f]) != type) continue;
+        other = true;
+        same_file |= sq_file(f) == sq_file(from);
+        same_rank |= sq_rank(f) == sq_rank(from);
+      }
+      if (other && (!same_file || same_rank)) *o++ = char('a' + sq_file(from));
+      if (other && same_file) *o++ = char('1' + sq_rank(from));
+    }
+    if (capture) *o++ = 'x';
+    *o++ = char('a' + sq_file(to));
+    *o++ = char('1' + sq_rank(to));
+    if (int p = move_promo(m)) {
+      *o++ = '=';
+      *o++ = LETTER[p];
+    }
+  }
+  b.make(m);
+  if (b.in_check()) *o++ = b.gen_legal(moves) ? '+' : '#';
+  b.unmake();
+  *o = 0;
+}
+
 Move parse_uci(Board& b, const char* s) {
   Move moves[MAX_MOVES];
   int n = b.gen_legal(moves);

@@ -8,13 +8,12 @@ image. Pick your board below; if it isn't listed, see
 | Board | Screen | Firmware image | PlatformIO env |
 |---|---|---|---|
 | Waveshare ESP32-S3-Touch-LCD-7 | 7", 800x480, capacitive touch | `cst-retro-<version>-ws7.bin` | `ws7` |
-| M5Stack CoreS3 | 2", 320x240, capacitive touch | `cst-retro-<version>-cores3.bin` (not built yet for 0.1.0) | `cores3` |
+| M5Stack CoreS3 | 2", 320x240, capacitive touch | `cst-retro-<version>-cores3.bin` (not built yet) | `cores3` |
 
 The images are in [`dist/`](../dist). Each is the whole flash contents
 (bootloader, partition table and program, with the opening book and the
-NNUE built in), written at address 0. Flashing erases nothing else you need:
-settings (time control, book, evaluation, your clock) are re-created with
-defaults.
+NNUE built in), written at address 0. Flashing resets the board's saved
+settings (time control, book, evaluation, your clock) to their defaults.
 
 ## 1. Connect the board
 
@@ -43,7 +42,7 @@ pip install esptool
 then, with your board's image and port:
 
 ```
-esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.0-ws7.bin
+esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.1-ws7.bin
 ```
 
 (Older esptool versions spell it `esptool.py ... write_flash`.) It takes

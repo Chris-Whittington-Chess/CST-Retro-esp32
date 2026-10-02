@@ -116,8 +116,11 @@ struct Board {
 void move_to_uci(Move m, char* out);
 // Find the legal move matching a long algebraic string; 0 if none.
 Move parse_uci(Board& b, const char* s);
+// Standard algebraic (Nf3, exd5, Rad1, e8=Q+, O-O#) for a legal move m in
+// position b; b is unchanged afterwards. out >= 10 bytes.
+void move_to_san(Board& b, Move m, char* out);
 
-// Depth <= MAX_PERFT_DEPTH (returns 0 beyond it); move lists live on a shared
-// static stack with MAX_MOVES room per ply (16 KB).
+// Depth <= MAX_PERFT_DEPTH (returns 0 beyond it); move lists live on a
+// heap-allocated stack with MAX_MOVES room per ply (16 KB).
 enum { MAX_PERFT_DEPTH = 16, MOVE_STACK_SIZE = MAX_PERFT_DEPTH * MAX_MOVES };
 u64 perft(Board& b, int depth);
