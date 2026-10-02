@@ -338,6 +338,8 @@ static void flush_info() {
 }
 
 static void engine_loop(void*) {
+  // Stack guard: nodes stop deepening 2 KB above the bottom of this stack.
+  search_stack_floor = (const char*)pxTaskGetStackStart(nullptr) + 2048;
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     int c = eng_command;

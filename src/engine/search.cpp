@@ -16,6 +16,7 @@ SearchOptions search_options;
 uint64_t prof_total[P_COUNT];
 #endif
 volatile bool search_stop = false;
+const char* search_stack_floor = nullptr;
 
 namespace {
 
@@ -95,6 +96,13 @@ Move pick(Move* m, int* sc, int n, int i) {
   return m[i];
 }
 
+// The stack guard (search_stack_floor): this frame is near the bottom of the
+// engine task's stack. One compare per node.
+inline bool stack_low() {
+  char here;
+  return search_stack_floor && uintptr_t(&here) < uintptr_t(search_stack_floor);
+}
+
 // ---- quiescence ----
 
 int qsearch(Board& b, int alpha, int beta, int ply, int base) {
@@ -102,7 +110,7 @@ int qsearch(Board& b, int alpha, int beta, int ply, int base) {
   if ((++nodes & 1023) == 0) check_time();
   if (stopped) return 0;
   if (ply > seldepth) seldepth = ply;
-  if (ply >= MAX_PLY || base + MAX_MOVES > MOVE_STACK) return evaluate(b);
+  if (ply >= MAX_PLY || base + MAX_MOVES > MOVE_STACK || stack_low()) return evaluate(b);
 
   bool hit;
   TTEntry* e;
@@ -170,7 +178,7 @@ int search(Board& b, int alpha, int beta, int depth, int ply, int base, bool nul
   const bool root = ply == 0;
   if (!root) {
     if (b.rule50 >= 100 || is_repetition(b) || insufficient_material(b)) return 0;
-    if (ply >= MAX_PLY || base + MAX_MOVES > MOVE_STACK) return evaluate(b);
+    if (ply >= MAX_PLY || base + MAX_MOVES > MOVE_STACK || stack_low()) return evaluate(b);
     // Mate distance pruning.
     if (alpha < -MATE + ply) alpha = -MATE + ply;
     if (beta > MATE - ply - 1) beta = MATE - ply - 1;

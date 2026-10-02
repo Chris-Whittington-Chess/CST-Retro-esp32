@@ -48,6 +48,12 @@ extern SearchOptions search_options;
 // Set from another task/thread to abort the current search.
 extern volatile bool search_stop;
 
+// Stack guard for small machines: a node whose stack frame lies below this
+// address returns its static evaluation instead of searching deeper (as at
+// MAX_PLY). The firmware sets it a little above the bottom of the engine
+// task's stack; nullptr (the PC) = no guard.
+extern const char* search_stack_floor;
+
 // Platform clock in milliseconds (supplied by the host program / firmware).
 u32 engine_now_ms();
 
