@@ -7,6 +7,10 @@ speaks UCI over USB, so a PC can set up positions or run engine matches.
 The engine borrows ideas from CStal-5 (Chess System Tal 5) but is a fresh,
 small-machine design: 32-bit CPU, ~300 KB internal SRAM, PSRAM for the big stuff.
 
+Website: [whittingtonchess.com/retro-chess.html](https://whittingtonchess.com/retro-chess.html)
+(photos, and install from the browser). Boards: Waveshare ESP32-S3-Touch-LCD-7 (7")
+and M5Stack CoreS3 (2"); ready-made firmware in `dist/`, see [docs/INSTALL.md](docs/INSTALL.md).
+
 ## Design
 
 | Part | Choice | Why |
@@ -127,3 +131,14 @@ Device notes:
 - Piece images: the "cburnett" set by Colin M.L. Burnett (BSD licence, `tools/pieces/cburnett`).
   `tools/make_pieces.py` still renders the earlier DejaVu Sans set (Bitstream Vera licence).
 - Polyglot Zobrist keys: the standard Polyglot book format.
+
+## Licence
+
+Copyright 2026 Chris Whittington. Licensed under the [Apache License 2.0](LICENSE), including the
+trained network in `data/net.bin`.
+
+You may use, modify and share this code and the programs built from it, including commercially -
+but anything you distribute, as source or as a compiled program, must carry the [NOTICE](NOTICE)
+file crediting Chris Whittington (in a NOTICE file, its documentation, or a screen the program
+shows). Third-party parts (M5GFX / M5Unified, arduino-esp32, the cburnett pieces, the Jeroen.bin
+book, the PeSTO tables) keep their own licences: see [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).

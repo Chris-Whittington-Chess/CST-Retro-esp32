@@ -1,13 +1,13 @@
 {
   "name": "CST Retro - Waveshare ESP32-S3-Touch-LCD-7 (7 inch, 800x480)",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "cst-retro-0.1.1-ws7.bin",
+          "path": "cst-retro-0.1.3-ws7.bin",
           "offset": 0
         }
       ]

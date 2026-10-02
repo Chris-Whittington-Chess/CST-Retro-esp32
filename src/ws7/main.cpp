@@ -271,6 +271,7 @@ static bool autoplay;      // serial 'a': the engine plays both sides
 static bool use_book = true;
 static bool last_from_book;
 static u32 book_move_at;  // a book move is shown after a short pause
+static int uci_side = -1;  // UCI: the board's colour in the game (the side it was last asked to move)
 static bool uci_own_book;  // UCI option OwnBook (off: GUIs/matches bring their own)
 static bool touch_log;
 static bool nnue_ok;        // net loaded at boot
@@ -714,7 +715,7 @@ static int32_t clock_now(int side) {
 }
 
 static void clock_text(int side, char* buf) {
-  if (phase == UCI) snprintf(buf, 12, "%s", side == ::WHITE ? "White" : "Black");
+  if (phase == UCI) snprintf(buf, 12, "%s", side == uci_side ? "CST" : uci_side < 0 ? "" : "PC");
   else if (timed() && !clock_runs(side)) snprintf(buf, 12, "No clock");
   else if (timed()) fmt_clock(clock_now(side), buf);
   else snprintf(buf, 12, "%s", side == human ? "You" : "CST");
@@ -804,8 +805,11 @@ static void draw_status() {
     return;
   }
   // first line: what is going on; second: the engine's depth and score
-  if (phase == UCI) line(ACTIVE, eng_busy ? "UCI - thinking..." : "UCI via USB");
-  else if (phase == OVER) {
+  if (phase == UCI) {
+    if (uci_side < 0) snprintf(buf, sizeof buf, "UCI via USB");
+    else snprintf(buf, sizeof buf, "UCI: CST is %s", uci_side == ::WHITE ? "White" : "Black");
+    line(ACTIVE, buf);
+  } else if (phase == OVER) {
     line(ACTIVE, result[0]);
     line(ACTIVE, result[1]);
   } else if (phase == ENGINE) line(TEXT, "Thinking...");
@@ -1180,6 +1184,10 @@ static void enter_uci() {
 static void uci_go_cmd(const char* line) {
   if (phase != UCI) enter_uci();
   stop_engine();
+  // The board's colour: its side goes to the bottom, its clock box says CST.
+  uci_side = game.stm;
+  if (flipped != (uci_side == ::BLACK)) flipped = !flipped;
+  dirty = true;
   if (uci_own_book) {
     Move m = book_pick(game, book_start, size_t(book_end - book_start), esp_random());
     if (m) {

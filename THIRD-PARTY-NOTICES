@@ -1,0 +1,61 @@
+Third-party notices for CST-Retro-esp32
+=======================================
+
+1. M5GFX - graphics library, compiled into the firmware (both boards)
+   https://github.com/m5stack/M5GFX
+   MIT License, Copyright (c) 2021 M5Stack. It contains LovyanGFX
+   (https://github.com/lovyan03/LovyanGFX, FreeBSD License) and the Adafruit-GFX
+   format FreeFonts derived from GNU FreeFont (GPL with the font exception: the
+   fonts may be embedded in a program without that program falling under the
+   GPL). Its licence file follows.
+
+------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2021 M5Stack
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+------------------------------------------------------------------------------
+
+2. M5Unified - M5Stack board support, compiled into the CoreS3 firmware
+   https://github.com/m5stack/M5Unified
+   MIT License, Copyright (c) 2021 M5Stack (same terms as above).
+
+3. arduino-esp32 and ESP-IDF - the framework the firmware is built on
+   https://github.com/espressif/arduino-esp32 (LGPL-2.1)
+   https://github.com/espressif/esp-idf (Apache License 2.0)
+   Linked into the firmware images in dist/; the sources are available at the
+   links above, and the firmware can be rebuilt from this repository against
+   them (see docs/INSTALL.md).
+
+4. Chess piece artwork - the "cburnett" set by Colin M.L. Burnett
+   tools/pieces/cburnett, rendered into src/*/pieces.h
+   Copyright (C) Colin M.L. Burnett. Triple licensed under the GFDL, BSD and
+   GPL; used here under the BSD terms, which require this notice.
+
+5. Opening book data/Jeroen.bin - by Jeroen Noomen, freely distributed.
+
+6. PeSTO piece-square tables - by Ronald Friederich (Rofchade), published on
+   the Chess Programming Wiki (https://www.chessprogramming.org/PeSTO's_Evaluation_Function).
+
+7. Polyglot Zobrist keys - the standard Polyglot opening book format.
+
+8. tools/make_pieces.py renders an alternative piece set from DejaVu Sans
+   (https://dejavu-fonts.github.io/, Bitstream Vera licence); the released
+   firmware uses the cburnett set.

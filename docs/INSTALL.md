@@ -42,17 +42,18 @@ pip install esptool
 then, with your board's image and port:
 
 ```
-esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.1-ws7.bin
+esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.3-ws7.bin
 ```
 
-(The current images: `cst-retro-0.1.1-ws7.bin`, `cst-retro-0.1.2-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
+(The current images: `cst-retro-0.1.3-ws7.bin`, `cst-retro-0.1.2-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
 about 10 seconds; the board restarts into the game.
 
 ### From the browser
 
-The `dist/manifest-<board>.json` files are for a browser installer (ESP Web
-Tools: Chrome or Edge, board on USB, one Install button per board). It needs
-the images hosted on a web page - not set up yet.
+On [whittingtonchess.com/retro-chess.html](https://whittingtonchess.com/retro-chess.html#install):
+one Install button per board (ESP Web Tools - Chrome or Edge on a PC or Mac,
+board plugged in by USB). The `dist/manifest-<board>.json` files are what
+those buttons use.
 
 ### From source
 
