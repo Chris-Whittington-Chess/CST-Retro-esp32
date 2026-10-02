@@ -271,6 +271,7 @@ static bool autoplay;      // serial 'a': the engine plays both sides
 static bool use_book = true;
 static bool last_from_book;
 static u32 book_move_at;  // a book move is shown after a short pause
+static char uci_last_bestmove[16];  // re-sent on a "stop" after the answer (see serial_line)
 static int uci_side = -1;  // UCI: the board's colour in the game (the side it was last asked to move)
 static bool uci_own_book;  // UCI option OwnBook (off: GUIs/matches bring their own)
 static bool touch_log;
@@ -1186,6 +1187,7 @@ static void uci_go_cmd(const char* line) {
   stop_engine();
   // The board's colour: its side goes to the bottom, its clock box says CST.
   uci_side = game.stm;
+  uci_last_bestmove[0] = 0;
   if (flipped != (uci_side == ::BLACK)) flipped = !flipped;
   dirty = true;
   if (uci_own_book) {
@@ -1194,6 +1196,7 @@ static void uci_go_cmd(const char* line) {
       char mv[6];
       move_to_uci(m, mv);
       uci_send("bestmove %s", mv);
+      snprintf(uci_last_bestmove, sizeof uci_last_bestmove, "%s", mv);
       return;
     }
   }
@@ -1214,6 +1217,7 @@ static void uci_done() {
   char mv[6] = "0000";
   if (m) move_to_uci(m, mv);
   uci_send("bestmove %s", mv);
+  snprintf(uci_last_bestmove, sizeof uci_last_bestmove, "%s", mv);
   eng_uci = false;
   if (m && game.hply < MAX_GAME - MAX_PLY - 2) {
     record_eval(m, white_view(eng_score));
@@ -1262,7 +1266,14 @@ static void serial_line(char* line) {
   } else if (!strncmp(line, "go", 2) && (line[2] == 0 || line[2] == ' ')) {
     uci_go_cmd(line);
   } else if (!strcmp(line, "stop")) {
-    if (eng_uci) search_stop = true;  // the search ends and answers bestmove
+    if (eng_uci) {
+      search_stop = true;  // the search ends and answers bestmove
+    } else if (phase == UCI && uci_last_bestmove[0] && !eng_busy) {
+      // Already answered, yet the GUI still waits for a move: our bestmove
+      // line must have been lost on the way (cutechess sends "stop" only to
+      // a thinking engine). Say it again rather than forfeit the game.
+      uci_send("bestmove %s", uci_last_bestmove);
+    }
   } else if (!strcmp(line, "quit")) {
     if (phase == UCI) play_from_here();
   } else if (!strcmp(line, "d")) {
@@ -1284,6 +1295,10 @@ static void serial_line(char* line) {
     usb_print(boot_log);
     usb_printf("eval %s, PSRAM free %u KB\n", use_nnue && nnue_ok ? "NNUE" : "PeSTO",
                unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    uint32_t dropped, wait_ms;
+    usb_out_stats(&dropped, &wait_ms);
+    usb_printf("up %lu s, USB dropped %lu bytes, longest PC wait %lu ms\n",
+               (unsigned long)(millis() / 1000), (unsigned long)dropped, (unsigned long)wait_ms);
     boot_note("now");
   } else if (!strcmp(line, "touchlog")) {
     touch_log = !touch_log;

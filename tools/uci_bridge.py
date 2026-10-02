@@ -27,13 +27,26 @@ ap.add_argument("--port", default="COM3")
 ap.add_argument("--log", help="append the whole conversation to this file")
 a = ap.parse_args()
 
+log = open(a.log, "a", encoding="utf-8") if a.log else None
+lock = threading.Lock()
 s = serial.Serial()
 s.port, s.baudrate, s.timeout = a.port, 115200, 0.005  # short: replies pass straight through
 s.dtr = s.rts = False
-s.open()
+# Retry the open for a while: cutechess quits the previous bridge and starts
+# this one at once, and Windows may not have released the port yet ("access
+# denied") - an overnight gauntlet ended there, unable to start the engine.
+for attempt in range(100):
+    try:
+        s.open()
+        break
+    except serial.SerialException as e:
+        if log:
+            log.write(f"{time.time() % 1000:8.3f} ! open {a.port} failed ({e!r}), retrying\n")
+            log.flush()
+        if attempt == 99:
+            raise
+        time.sleep(0.1)
 s.reset_input_buffer()
-log = open(a.log, "a", encoding="utf-8") if a.log else None
-lock = threading.Lock()
 
 
 def note(prefix, text):

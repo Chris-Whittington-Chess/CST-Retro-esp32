@@ -21,16 +21,24 @@
 
 static StreamBufferHandle_t queue_;
 static SemaphoreHandle_t lock_;  // several tasks may print
+static volatile uint32_t dropped_, longest_wait_ms_;  // diagnostics, see usb_out_stats()
 
 static void writer(void*) {
   uint8_t chunk[64];
   for (;;) {
     size_t n = xStreamBufferReceive(queue_, chunk, sizeof chunk, portMAX_DELAY);
     size_t done = 0;
+    uint32_t wait_from = 0;
     while (done < n) {
       if (!usb_serial_jtag_ll_txfifo_writable()) {
+        if (!wait_from) wait_from = millis() | 1;
         vTaskDelay(1);  // the PC hasn't collected the last packet yet
         continue;
+      }
+      if (wait_from) {
+        uint32_t w = millis() - wait_from;
+        if (w > longest_wait_ms_) longest_wait_ms_ = w;
+        wait_from = 0;
       }
       done += usb_serial_jtag_ll_write_txfifo(chunk + done, uint32_t(n - done));
       usb_serial_jtag_ll_txfifo_flush();
@@ -50,11 +58,19 @@ void usb_write(const void* data, size_t n) {
   const uint8_t* p = static_cast<const uint8_t*>(data);
   while (n) {
     size_t k = xStreamBufferSend(queue_, p, n, pdMS_TO_TICKS(50));
-    if (!k) break;  // PC not reading: drop the rest
+    if (!k) {  // PC not reading: drop the rest
+      dropped_ = dropped_ + uint32_t(n);
+      break;
+    }
     p += k;
     n -= k;
   }
   xSemaphoreGive(lock_);
+}
+
+void usb_out_stats(uint32_t* dropped, uint32_t* longest_wait_ms) {
+  *dropped = dropped_;
+  *longest_wait_ms = longest_wait_ms_;
 }
 
 void usb_print(const char* s) { usb_write(s, strlen(s)); }
