@@ -4,3 +4,4 @@ bin/
 *.png
 match/
 nnue-data/
+engines/
