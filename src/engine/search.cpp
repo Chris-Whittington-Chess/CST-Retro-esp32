@@ -9,6 +9,7 @@
 #include "eval.h"
 #include "nnue.h"
 #include "profile.h"
+#include "see.h"
 
 SearchOptions search_options;
 #ifdef SEARCH_PROFILE
@@ -19,6 +20,9 @@ volatile bool search_stop = false;
 namespace {
 
 enum { MOVE_STACK = 4096, MAX_QUIETS = 64 };
+// Ordering score offset for losing captures: below every quiet (history is
+// +-16384, killers 1 << 27).
+enum { BAD_CAPTURE = (1 << 28) + (1 << 20), LOSING = -(1 << 19) };
 
 TT* tt;
 Move move_stack[MOVE_STACK];
@@ -74,6 +78,7 @@ void score_moves(const Board& b, Move* m, int* sc, int n, Move tt_move, int ply)
       int v = (mv & MF_CAPTURE) ? ORDER_VALUE[victim] : 0;
       if (move_promo(mv)) v += ORDER_VALUE[move_promo(mv)];
       sc[i] = (1 << 28) + v * 16 - piece_type(b.sq[move_from(mv)]);
+      if (search_options.see_order && !see_ge(b, mv, 0)) sc[i] -= BAD_CAPTURE;  // after quiets
     } else if (mv == killers[ply][0]) sc[i] = (1 << 27) + 1;
     else if (mv == killers[ply][1]) sc[i] = 1 << 27;
     else sc[i] = history[b.sq[move_from(mv)]][move_to(mv)];
@@ -129,6 +134,8 @@ int qsearch(Board& b, int alpha, int beta, int ply, int base) {
   for (int i = 0; i < n; i++) {
     Move mv;
     PROF(P_ORDER, mv = pick(m, sc, n, i));
+    // Losing captures come last: the rest is not worth searching here.
+    if (!in_check && search_options.see_qsearch && sc[i] < LOSING) break;
     PROF(P_MAKE, b.make(mv));
     bool bad;
     PROF(P_CHECK, bad = b.leaves_check(mv, in_check));
@@ -215,6 +222,13 @@ int search(Board& b, int alpha, int beta, int depth, int ply, int base, bool nul
   for (int i = 0; i < n; i++) {
     Move mv;
     PROF(P_ORDER, mv = pick(m, sc, n, i));
+    // SEE pruning: near the leaves, skip moves that lose material outright
+    // (never the first move, the TT move, or when in check).
+    if (search_options.see_prune && !root && !in_check && legal && depth <= 8 &&
+        mv != tt_move && best > -MATE_BOUND) {
+      int threshold = is_quiet(mv) ? -30 * depth * depth : -100 * depth;
+      if (!see_ge(b, mv, threshold)) continue;
+    }
     PROF(P_MAKE, b.make(mv));
     bool bad;
     PROF(P_CHECK, bad = b.leaves_check(mv, in_check));

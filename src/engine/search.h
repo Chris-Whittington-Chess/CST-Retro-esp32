@@ -1,5 +1,6 @@
 // Chess System Tal Retro - search: iterative deepening, aspiration windows,
-// PVS with TT, null move, reverse futility, LMR, check extension, quiescence.
+// PVS with TT, null move, reverse futility, LMR, check extension, quiescence,
+// SEE (ordering, quiescence, low-depth pruning).
 // Single-threaded; on the ESP32 it runs in its own task while the UI runs on
 // the other core.
 #pragma once
@@ -37,6 +38,9 @@ struct SearchOptions {
   bool lmr = true;
   bool check_ext = true;
   bool aspiration = true;
+  bool see_order = true;    // losing captures (SEE < 0) ordered after quiets
+  bool see_qsearch = true;  // ... and not searched in quiescence
+  bool see_prune = true;    // low-depth pruning of moves losing material
 };
 extern SearchOptions search_options;
 

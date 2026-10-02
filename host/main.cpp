@@ -15,6 +15,7 @@
 #include "../src/engine/board.h"
 #include "../src/engine/bench.h"
 #include "../src/engine/book.h"
+#include "../src/engine/see.h"
 #include "../src/engine/search.h"
 #include "host.h"
 
@@ -138,8 +139,32 @@ static int book_list(int argc, char** argv) {
   return 0;
 }
 
+// Textbook exchanges (CStal-5's seetest set, P=100 N=320 B=330 R=500 Q=900).
+static int see_test() {
+  static const struct { const char* fen; const char* move; int value; } T[] = {
+      {"4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1", "e4d5", 100},
+      {"4k3/8/2p5/3p4/4P3/8/8/4K3 w - - 0 1", "e4d5", 0},
+      {"4k3/8/2p5/3p4/8/8/3Q4/4K3 w - - 0 1", "d2d5", -800},
+      {"4k3/8/2p5/3p4/8/3R4/3R4/4K3 w - - 0 1", "d3d5", -300},
+      {"1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", "e1e5", 100},
+      {"1k1r3q/1ppn3p/p4b2/4p3/8/P2N2P1/1PP1R1BP/2K1Q3 w - - 0 1", "d3e5", -220},
+      {"4k3/8/8/3r4/8/8/3R4/3RK3 w - - 0 1", "d2d5", 500},
+  };
+  int ok = 0;
+  for (auto& t : T) {
+    board.set_fen(t.fen);
+    Move m = parse_uci(board, t.move);
+    int v = m ? see_value(board, m) : 99999;
+    ok += v == t.value;
+    printf("%s %5d (expect %5d)  %s  %s\n", v == t.value ? "ok  " : "FAIL", v, t.value, t.move, t.fen);
+  }
+  printf("see: %d/%d\n", ok, int(sizeof T / sizeof T[0]));
+  return ok != int(sizeof T / sizeof T[0]);
+}
+
 int main(int argc, char** argv) {
   if (argc < 2 || !strcmp(argv[1], "uci")) return uci_loop();
+  if (!strcmp(argv[1], "seetest")) return see_test();
   if (argc >= 3 && !strcmp(argv[1], "book")) return book_list(argc, argv);
   if (!strcmp(argv[1], "pgnfens")) return pgn_fens(argc, argv);
   if (!strcmp(argv[1], "nneval")) return nnue_eval_file(argc, argv);

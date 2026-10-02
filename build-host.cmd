@@ -17,6 +17,6 @@ if /i "%1"=="bb" (
 if not exist bin\%NAME% mkdir bin\%NAME%
 "%LLVM%\clang-cl.exe" /nologo /std:c++17 /O2 /GS- /EHsc /DNDEBUG /D_CRT_SECURE_NO_WARNINGS /W3 %DEFS% ^
     host\main.cpp host\uci.cpp host\pgn.cpp src\engine\board.cpp src\engine\movegen88.cpp src\engine\movegen_bb.cpp ^
-    src\engine\eval.cpp src\engine\tt.cpp src\engine\search.cpp src\engine\book.cpp src\engine\uci_util.cpp src\engine\nnue.cpp ^
+    src\engine\eval.cpp src\engine\tt.cpp src\engine\search.cpp src\engine\book.cpp src\engine\uci_util.cpp src\engine\nnue.cpp src\engine\see.cpp ^
     /Fobin\%NAME%\ /Febin\%NAME%.exe || exit /b 1
 echo built bin\%NAME%.exe

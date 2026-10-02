@@ -56,6 +56,7 @@ int uci_loop() {
       printf("option name Hash type spin default 16 min 1 max 1024\n");
       printf("option name Eval type combo default PeSTO var PeSTO var NNUE\n");
       printf("option name EvalFile type string default <none>\n");
+      printf("option name SEE type check default true\n");
       printf("uciok\n");
     } else if (!strcmp(line, "isready")) {
       printf("readyok\n");
@@ -63,6 +64,9 @@ int uci_loop() {
       search_new_game();
     } else if (!strncmp(line, "setoption name Hash value ", 26)) {
       set_hash(atoi(line + 26));
+    } else if (!strncmp(line, "setoption name SEE value ", 25)) {
+      bool on = !strcmp(line + 25, "true");  // all three SEE uses (A/B tests)
+      search_options.see_order = search_options.see_qsearch = search_options.see_prune = on;
     } else if (!strncmp(line, "setoption name EvalFile value ", 30)) {
       nnue_file(line + 30);
     } else if (!strncmp(line, "setoption name Eval value ", 26)) {
