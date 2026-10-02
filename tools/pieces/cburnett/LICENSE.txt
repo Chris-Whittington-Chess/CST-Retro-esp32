@@ -1,0 +1,4 @@
+Chess piece artwork: the "cburnett" set by Colin M.L. Burnett.
+Copyright (C) Colin M.L. Burnett.
+Triple licensed under the GFDL, BSD and GPL; used here under the BSD terms,
+which require this notice and impose no share-alike.

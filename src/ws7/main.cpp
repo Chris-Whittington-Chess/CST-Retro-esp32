@@ -34,6 +34,8 @@
 #include <Wire.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_rgb.h>
+#include <esp_log.h>
+#include <esp_task_wdt.h>
 #include "../cores3/usb_out.h"
 #include "../engine/bench.h"
 #include "../engine/board.h"
@@ -95,8 +97,25 @@ static esp_lcd_panel_handle_t panel;
 // ST7262 800x480 timings from the board's official ESP32_Display_Panel config.
 static bool lcd_begin() {
   esp_lcd_rgb_panel_config_t cfg = {};
-  cfg.clk_src = LCD_CLK_SRC_PLL160M;
+#if ESP_IDF_VERSION_MAJOR >= 5
+  // ESP-IDF 5 (env ws7, arduino-esp32 3.x): bounce buffers. The DMA reads two
+  // small internal-SRAM buffers that an interrupt refills from the PSRAM frame
+  // buffer, so the engine's flash fetches (flash and PSRAM share the bus) no
+  // longer starve the LCD - on IDF 4.4 that showed as a jumping picture.
+  cfg.clk_src = LCD_CLK_SRC_DEFAULT;
   cfg.timings.pclk_hz = 16 * 1000 * 1000;
+  cfg.bits_per_pixel = 16;
+  cfg.num_fbs = 1;
+  cfg.bounce_buffer_size_px = SCREEN_W * 10;
+  cfg.dma_burst_size = 64;
+#else
+  // IDF 4.4 (no bounce buffers): the DMA reads PSRAM directly and glitches
+  // when the bus is busy. 160/11 = 14.5 MHz eases it a little; keep an integer
+  // divider of 160 MHz - 12 MHz (fractional) left the panel blank.
+  cfg.clk_src = LCD_CLK_SRC_PLL160M;
+  cfg.timings.pclk_hz = 160 * 1000 * 1000 / 11;
+  cfg.psram_trans_align = 64;
+#endif
   cfg.timings.h_res = SCREEN_W;
   cfg.timings.v_res = SCREEN_H;
   cfg.timings.hsync_pulse_width = 4;
@@ -107,7 +126,6 @@ static bool lcd_begin() {
   cfg.timings.vsync_front_porch = 8;
   cfg.timings.flags.pclk_active_neg = 1;
   cfg.data_width = 16;
-  cfg.psram_trans_align = 64;
   cfg.hsync_gpio_num = 46;
   cfg.vsync_gpio_num = 3;
   cfg.de_gpio_num = 5;
@@ -248,6 +266,11 @@ static bool touch_log;
 static bool nnue_ok;        // net loaded at boot
 static bool use_nnue;       // menu / UCI choice (saved in NVS from the menu)
 static EvalMode last_mode = EVAL_PESTO;
+static bool human_clock = true;  // menu: your clock counts down (off: only the engine's runs)
+static u32 menu_opened_at;
+static int menu_page;  // 0 the menu, 1 "End game": resign / claim win / agree draw
+
+static bool clock_runs(int side) { return side != human || human_clock; }
 
 // ---------------------------------------------------------------- engine task
 
@@ -418,7 +441,7 @@ static void play(Move m, bool engine = false) {
   int us = game.stm;
   clock_hist[game.hply][0] = clock_ms[0];
   clock_hist[game.hply][1] = clock_ms[1];
-  if (timed() && game.hply) clock_ms[us] += int32_t(TCS[tc_game].inc_ms) - int32_t(now - turn_start);
+  if (timed() && game.hply && clock_runs(us)) clock_ms[us] += int32_t(TCS[tc_game].inc_ms) - int32_t(now - turn_start);
   if (autoplay) {
     char mv[6];
     move_to_uci(m, mv);
@@ -505,6 +528,36 @@ static void take_back() {
   dirty = true;
 }
 
+// The menu pauses your clock: on closing, your turn restarts later by the
+// time it was open (counted from when your turn began, if the engine moved
+// while the menu was up).
+static void set_menu(bool open) {
+  if (open == menu_open) return;
+  u32 now = millis();
+  if (open) {
+    menu_opened_at = now;
+    menu_page = 0;
+  } else if (phase == HUMAN) {
+    u32 from = int32_t(turn_start - menu_opened_at) > 0 ? turn_start : menu_opened_at;
+    turn_start += now - from;
+  }
+  menu_open = open;
+}
+
+// Can colour c still mate at all? FIDE 6.9: losing on time to a lone king,
+// or to king + one minor piece, is a draw.
+static bool can_mate(int c) {
+  int pieces = 0, minors = 0;
+  for (int s = 0; s < 128; s++) {
+    if (!on_board(s) || game.sq[s] == EMPTY || piece_color(game.sq[s]) != c) continue;
+    int t = piece_type(game.sq[s]);
+    if (t == KING) continue;
+    pieces++;
+    if (t == KNIGHT || t == BISHOP) minors++;
+  }
+  return pieces > 1 || (pieces == 1 && minors == 0);
+}
+
 // ---------------------------------------------------------------- drawing
 
 static void square_xy(int s, int& x, int& y) {
@@ -573,15 +626,18 @@ static void fmt_clock(int32_t ms, char* out) {
     snprintf(out, 12, "%u:%02u", unsigned(s / 60), unsigned(s % 60));
 }
 
+// Your clock stands still while the menu is open (the engine's does not).
 static int32_t clock_now(int side) {
   int32_t ms = clock_ms[side];
-  if ((phase == HUMAN || phase == ENGINE) && game.stm == side && game.hply)
+  if ((phase == HUMAN || phase == ENGINE) && game.stm == side && game.hply && clock_runs(side) &&
+      !(menu_open && phase == HUMAN))
     ms -= int32_t(millis() - turn_start);
   return ms;
 }
 
 static void clock_text(int side, char* buf) {
   if (phase == UCI) snprintf(buf, 12, "%s", side == ::WHITE ? "White" : "Black");
+  else if (timed() && !clock_runs(side)) snprintf(buf, 12, "No clock");
   else if (timed()) fmt_clock(clock_now(side), buf);
   else snprintf(buf, 12, "%s", side == human ? "You" : "CST");
 }
@@ -665,12 +721,14 @@ static void draw_status() {
   // first line: what is going on; second: the engine's depth and score
   if (phase == UCI) line(ACTIVE, eng_busy ? "UCI - thinking..." : "UCI via USB");
   else if (phase == OVER) {
-    snprintf(buf, sizeof buf, "%s - %s", result[0], result[1]);
-    line(ACTIVE, buf);
+    line(ACTIVE, result[0]);
+    line(ACTIVE, result[1]);
   } else if (phase == ENGINE) line(TEXT, "Thinking...");
   else line(TEXT, game.in_check() ? "Check!" : "Your move");
   frame.setFont(&fonts::FreeSans12pt7b);
-  if (eng_busy && info_depth && (phase == ENGINE || phase == UCI)) {
+  if (phase == OVER) {
+    // the result took the second line
+  } else if (eng_busy && info_depth && (phase == ENGINE || phase == UCI)) {
     char sc[16];
     fmt_score(game.stm == ::WHITE ? info_score : -info_score, sc);
     snprintf(buf, sizeof buf, "depth %d   %s", info_depth, sc);
@@ -701,9 +759,21 @@ static void draw_panel() {
 }
 
 // Menu: a column of full-width buttons.
-enum { MENU_X = 150, MENU_W = 500, MENU_Y0 = 64, MENU_H = 52, MENU_GAP = 7, MENU_ITEMS = 7 };
+enum { MENU_X = 150, MENU_W = 500, MENU_Y0 = 56, MENU_H = 42, MENU_GAP = 5, MENU_ITEMS = 9 };
+
+enum { END_ITEMS = 4 };
+
+static bool game_on() { return phase == HUMAN || phase == ENGINE; }
+
+static int menu_items() { return menu_page ? END_ITEMS : MENU_ITEMS; }
 
 static void menu_label(int i, char* out) {
+  if (menu_page) {
+    static const char* const END[END_ITEMS] = {"Resign - you lose", "Claim win - you win", "Agree draw",
+                                               "Back"};
+    snprintf(out, 48, "%s%s", END[i], i < 3 && !game_on() ? " (no game on)" : "");
+    return;
+  }
   switch (i) {
     case 0:
       snprintf(out, 48, phase == UCI ? "Leave UCI - play from here" : "New game - play White");
@@ -712,11 +782,13 @@ static void menu_label(int i, char* out) {
     case 2:
       snprintf(out, 48, "Time: %s%s", TCS[tc_index].name, tc_index != tc_game ? " (next game)" : "");
       break;
-    case 3: snprintf(out, 48, "Opening book: %s", use_book ? "on" : "off"); break;
-    case 4:
+    case 3: snprintf(out, 48, "Your clock: %s", human_clock ? "counts down" : "off - no time limit"); break;
+    case 4: snprintf(out, 48, "Opening book: %s", use_book ? "on" : "off"); break;
+    case 5:
       snprintf(out, 48, "Evaluation: %s", !nnue_ok ? "PeSTO (no net)" : use_nnue ? "NNUE" : "PeSTO");
       break;
-    case 5: snprintf(out, 48, "Flip board"); break;
+    case 6: snprintf(out, 48, "Flip board"); break;
+    case 7: snprintf(out, 48, "End game: resign / claim win / draw"); break;
     default: snprintf(out, 48, "Close"); break;
   }
 }
@@ -726,8 +798,8 @@ static void draw_menu() {
   frame.setFont(&fonts::FreeSansBold18pt7b);
   frame.setTextColor(ACTIVE);
   frame.setTextDatum(top_center);
-  frame.drawString("Chess System Tal Retro", SCREEN_W / 2, 14);
-  for (int i = 0; i < MENU_ITEMS; i++) {
+  frame.drawString(menu_page ? "End the game" : "Chess System Tal Retro", SCREEN_W / 2, 14);
+  for (int i = 0; i < menu_items(); i++) {
     char label[48];
     menu_label(i, label);
     draw_button(MENU_X, MENU_Y0 + i * (MENU_H + MENU_GAP), MENU_W, MENU_H, label);
@@ -781,17 +853,46 @@ static void refresh_panel() {
 
 // ---------------------------------------------------------------- touch
 
+// Resign (0), claim a win (1) or agree a draw (2): the game ends like a mate.
+static void end_game(int how) {
+  stop_engine();
+  const char* you = human == ::WHITE ? "White" : "Black";
+  const char* cst = human == ::WHITE ? "Black" : "White";
+  char a[24], b[24];
+  if (how == 0) {
+    snprintf(a, sizeof a, "%s resigns", you);
+    snprintf(b, sizeof b, "%s wins", cst);
+  } else if (how == 1) {
+    snprintf(a, sizeof a, "Win claimed");
+    snprintf(b, sizeof b, "%s wins", you);
+  } else {
+    snprintf(a, sizeof a, "Draw agreed");
+    snprintf(b, sizeof b, "Draw");
+  }
+  set_result(a, b);
+}
+
 static void tap_menu(int x, int y) {
   if (x < MENU_X || x >= MENU_X + MENU_W || y < MENU_Y0) return;
   int i = (y - MENU_Y0) / (MENU_H + MENU_GAP);
-  if (i >= MENU_ITEMS || (y - MENU_Y0) % (MENU_H + MENU_GAP) >= MENU_H) return;
+  if (i >= menu_items() || (y - MENU_Y0) % (MENU_H + MENU_GAP) >= MENU_H) return;
+  if (menu_page) {
+    if (i < 3 && game_on()) {
+      end_game(i);
+      set_menu(false);
+    } else {
+      menu_page = 0;
+    }
+    dirty = true;
+    return;
+  }
   switch (i) {
     case 0:
-      menu_open = false;
+      set_menu(false);
       if (phase == UCI) play_from_here();
       else new_game(::WHITE);
       break;
-    case 1: menu_open = false; new_game(::BLACK); break;
+    case 1: set_menu(false); new_game(::BLACK); break;
     case 2:
       tc_index = (tc_index + 1) % NUM_TCS;
       prefs.putInt("tc", tc_index);
@@ -802,17 +903,24 @@ static void tap_menu(int x, int y) {
       }
       break;
     case 3:
+      // off: your clock stands still (no flag); on again: it runs from now
+      human_clock = !human_clock;
+      prefs.putBool("hclock", human_clock);
+      turn_start = millis();
+      break;
+    case 4:
       use_book = !use_book;
       prefs.putBool("book", use_book);
       break;
-    case 4:
+    case 5:
       if (nnue_ok) {
         use_nnue = !use_nnue;
         prefs.putBool("nnue", use_nnue);
       }
       break;
-    case 5: flipped = !flipped; menu_open = false; break;
-    default: menu_open = false; break;
+    case 6: flipped = !flipped; set_menu(false); break;
+    case 7: menu_page = 1; break;
+    default: set_menu(false); break;
   }
   dirty = true;
 }
@@ -926,7 +1034,7 @@ static void tap(int x, int y) {
   if (x < PANEL_X) return tap_board(x, y);
   if (y >= BUTTON_Y - 8 && x < MENU_BTN_X - 4) return take_back();
   if (y >= BUTTON_Y - 8) {
-    menu_open = true;
+    set_menu(true);
     dirty = true;
   }
 }
@@ -960,7 +1068,7 @@ static void uci_send(const char* fmt, ...) {
 static void enter_uci() {
   stop_engine();
   autoplay = false;
-  menu_open = false;
+  set_menu(false);
   selected = -1;
   nsel = 0;
   promo_from = -1;
@@ -1092,6 +1200,7 @@ void setup() {
   // moves" lines arriving while the screen redraws (bytes lost, newline too).
   Serial.setRxBufferSize(16384);
   Serial.begin(115200);  // input only; output goes through usb_out
+  esp_log_level_set("*", ESP_LOG_NONE);  // nothing else may write to the UCI stream
   usb_out_begin();
   board_begin();  // USB selected, LCD and touch out of reset
   frame.setPsram(true);
@@ -1107,7 +1216,18 @@ void setup() {
   // leaves 32 KB for the system. Without room for the net the board plays
   // PeSTO.
   load_net();
-  disableCore0WDT();  // the engine keeps core 0 busy while it thinks
+  // The engine keeps core 0 busy while it thinks: stop watching its idle task.
+#if ESP_IDF_VERSION_MAJOR >= 5
+  // (disableCore0WDT() on IDF 5 leaves the idle hook feeding a watchdog it
+  // was removed from - an error line every tick.)
+  esp_task_wdt_config_t wdt = {};
+  wdt.timeout_ms = 5000;
+  wdt.idle_core_mask = 1 << 1;
+  wdt.trigger_panic = false;
+  esp_task_wdt_reconfigure(&wdt);
+#else
+  disableCore0WDT();
+#endif
   if (xTaskCreatePinnedToCore(engine_loop, "engine", 16 * 1024, nullptr, 1, &eng_task, 0) != pdPASS)
     usb_println("engine task not created: out of internal SRAM");
   size_t tt_bytes = 128 * 1024;
@@ -1126,6 +1246,7 @@ void setup() {
   tc_index = prefs.getInt("tc", DEFAULT_TC);
   if (tc_index < 0 || tc_index >= NUM_TCS) tc_index = DEFAULT_TC;
   use_book = prefs.getBool("book", true);
+  human_clock = prefs.getBool("hclock", true);
   use_nnue = nnue_ok && prefs.getBool("nnue", true);
   new_game(::WHITE);
   usb_printf("CST Retro ready, internal free %u KB (largest %u KB)\n",
@@ -1166,8 +1287,9 @@ void loop() {
   if ((phase == HUMAN || phase == ENGINE) && timed() && clock_now(game.stm) <= 0) {
     if (phase == ENGINE) stop_engine();
     clock_ms[game.stm] = 0;
+    const char* wins = game.stm == ::WHITE ? "Black wins" : "White wins";
     set_result(game.stm == ::WHITE ? "White flagged" : "Black flagged",
-               game.stm == ::WHITE ? "Black wins" : "White wins");
+               can_mate(game.stm ^ 1) ? wins : "Draw");
     dirty = true;
   }
 
