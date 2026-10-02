@@ -49,3 +49,6 @@ u32 engine_now_ms();
 void search_init(TT* tt);
 void search_new_game();  // clears TT, history, killers
 SearchResult search(Board& b, const Limits& lim, ReportFn report);
+// The quiescence-search score of b (side to move), e.g. to find quiet
+// positions (== static eval) for training data. search_init() first.
+int quiescence(Board& b);

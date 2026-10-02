@@ -24,6 +24,7 @@ static void set_hash_kb(int kb) {
   tt.init(tt_mem, bytes);
 }
 static void set_hash(int mb) { set_hash_kb(mb << 10); }
+static bool nnue_file(const char* path);
 
 void print_info(const SearchReport& r) {
   char line[1024];
@@ -54,6 +55,7 @@ int uci_loop() {
       printf("id name CST Retro\nid author Chris Whittington\n");
       printf("option name Hash type spin default 16 min 1 max 1024\n");
       printf("option name Eval type combo default PeSTO var PeSTO var NNUE\n");
+      printf("option name EvalFile type string default <none>\n");
       printf("uciok\n");
     } else if (!strcmp(line, "isready")) {
       printf("readyok\n");
@@ -61,6 +63,8 @@ int uci_loop() {
       search_new_game();
     } else if (!strncmp(line, "setoption name Hash value ", 26)) {
       set_hash(atoi(line + 26));
+    } else if (!strncmp(line, "setoption name EvalFile value ", 30)) {
+      nnue_file(line + 30);
     } else if (!strncmp(line, "setoption name Eval value ", 26)) {
       eval_mode = strcmp(line + 26, "NNUE") ? EVAL_PESTO : EVAL_NNUE;
       if (eval_mode == EVAL_NNUE && !nnue_ready())
@@ -97,6 +101,58 @@ static bool nnue_random(int n, int h) {
     return false;
   }
   return true;
+}
+
+// Load a trained net file (tools/nnue/export.py) into fresh memory.
+static bool nnue_file(const char* path) {
+  FILE* f = fopen(path, "rb");
+  if (!f) {
+    printf("info string cannot open %s\n", path);
+    return false;
+  }
+  std::string data;
+  char chunk[65536];
+  size_t got;
+  while ((got = fread(chunk, 1, sizeof chunk, f)) > 0) data.append(chunk, got);
+  fclose(f);
+  int n, h;
+  if (!nnue_file_shape(data.data(), data.size(), &n, &h)) {
+    printf("info string %s is not a CSTN net\n", path);
+    return false;
+  }
+  free(nn_w);
+  free(nn_acc);
+  nn_w = malloc(nnue_weight_bytes(n, h));
+  nn_acc = malloc(nnue_acc_bytes(n));
+  if (!nnue_load(data.data(), data.size(), nn_w, nn_acc)) return false;
+  printf("info string NNUE %s: 768->%d%s%s->1\n", path, n, h ? "->" : "",
+         h ? std::to_string(h).c_str() : "");
+  return true;
+}
+
+// cstretro nneval <net.bin> <fens.txt>: the net's eval (cp, side to move) of
+// each FEN (text up to ';' or end of line) - for the export parity check.
+int nnue_eval_file(int argc, char** argv) {
+  if (argc < 4) {
+    printf("usage: cstretro nneval <net.bin> <fens.txt>\n");
+    return 1;
+  }
+  if (!nnue_file(argv[2])) return 1;
+  FILE* f = fopen(argv[3], "r");
+  if (!f) {
+    printf("cannot open %s\n", argv[3]);
+    return 1;
+  }
+  char line[512];
+  while (fgets(line, sizeof line, f)) {
+    char* end = strpbrk(line, ";\r\n");
+    if (end) *end = 0;
+    if (!line[0] || !board.set_fen(line)) continue;
+    nnue_new_root(board);
+    printf("%d\n", nnue_evaluate(board));
+  }
+  fclose(f);
+  return 0;
 }
 
 static u64 checked, mismatches;

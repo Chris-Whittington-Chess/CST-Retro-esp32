@@ -292,6 +292,13 @@ void search_init(TT* t) {
       lmr_table[d][m] = d && m ? u8(0.75 + log(double(d)) * log(double(m)) / 2.25) : 0;
 }
 
+int quiescence(Board& b) {
+  stopped = false;
+  hard_ms = 0;
+  node_limit = 0;
+  return qsearch(b, -INF, INF, 0, 0);
+}
+
 void search_new_game() {
   tt->clear();
   memset(history, 0, sizeof history);

@@ -141,6 +141,8 @@ static int book_list(int argc, char** argv) {
 int main(int argc, char** argv) {
   if (argc < 2 || !strcmp(argv[1], "uci")) return uci_loop();
   if (argc >= 3 && !strcmp(argv[1], "book")) return book_list(argc, argv);
+  if (!strcmp(argv[1], "pgnfens")) return pgn_fens(argc, argv);
+  if (!strcmp(argv[1], "nneval")) return nnue_eval_file(argc, argv);
   if (argc >= 3 && !strcmp(argv[1], "nncheck"))
     return nnue_test(atoi(argv[2]), argc >= 4 ? atoi(argv[3]) : 0);
   if (argc >= 3 && !strcmp(argv[1], "nnbench"))

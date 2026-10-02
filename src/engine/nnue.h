@@ -22,6 +22,7 @@ enum {
   NNUE_QB = 64,    // weight scale
   NNUE_H_SHIFT = 6,
   NNUE_SCALE = 400,
+  NNUE_MAX_CP = 20000,  // evaluations are clamped well below mate scores
 };
 
 // Bytes of weights / accumulator stack for width n and hidden layer h.
@@ -32,6 +33,17 @@ size_t nnue_acc_bytes(int n);
 // with weights at wmem and accumulators at amem (both 16-byte aligned),
 // filled with random values (seed) - a stand-in until a trained net exists.
 bool nnue_setup_random(int n, int h, u32 seed, void* wmem, void* amem);
+
+// A trained net (tools/nnue/export.py), little-endian:
+//   "CSTN", u32 version (1), u32 N, u32 H,
+//   int16 ft_w[768][N], int16 ft_b[N],
+//   H > 0: int16 l1_w[H][2N], int32 l1_b[H], int16 out_w[H]
+//   H = 0: int16 out_w[2N]
+//   int32 out_b
+// nnue_file_shape reads N and H (false if not a net); nnue_load copies the
+// weights into wmem (nnue_weight_bytes(N, H), 16-byte aligned).
+bool nnue_file_shape(const void* data, size_t size, int* n, int* h);
+bool nnue_load(const void* data, size_t size, void* wmem, void* amem);
 bool nnue_ready();
 int nnue_width();
 int nnue_hidden();

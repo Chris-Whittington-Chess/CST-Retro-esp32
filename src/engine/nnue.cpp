@@ -191,7 +191,10 @@ int output(const int16_t* us, const int16_t* them) {
     k_layer(x, l1_w, l1_b, h, 2 * N, H);
     sum = k_dot(h, out_w, H) + out_b;
   }
-  return int(sum * NNUE_SCALE / (NNUE_QA * NNUE_QB));
+  // sum * 400 / (255 * 64) without overflowing int32: 400/16320 = 25/1020.
+  static_assert(NNUE_SCALE == 400 && NNUE_QA * NNUE_QB == 16320, "rescale below");
+  int cp = int(sum * 25 / 1020);
+  return cp > NNUE_MAX_CP ? NNUE_MAX_CP : cp < -NNUE_MAX_CP ? -NNUE_MAX_CP : cp;
 }
 
 u32 rng_state;
@@ -242,6 +245,31 @@ bool nnue_setup_random(int n, int h, u32 seed, void* wmem, void* amem) {
   out_b = 0;
   memset(acc_key, 0, sizeof acc_key);
   root_hply = 0;
+  return true;
+}
+
+static u32 read_u32(const u8* p) { return u32(p[0]) | u32(p[1]) << 8 | u32(p[2]) << 16 | u32(p[3]) << 24; }
+
+bool nnue_file_shape(const void* data, size_t size, int* n, int* h) {
+  const u8* p = static_cast<const u8*>(data);
+  if (size < 16 || memcmp(p, "CSTN", 4) || read_u32(p + 4) != 1) return false;
+  int fn = int(read_u32(p + 8)), fh = int(read_u32(p + 12));
+  if (fn <= 0 || fn > NNUE_MAX_N || fn % 8 || fh < 0 || fh > NNUE_MAX_H || fh % 8) return false;
+  if (size != 16 + nnue_weight_bytes(fn, fh) + 4) return false;
+  *n = fn;
+  *h = fh;
+  return true;
+}
+
+bool nnue_load(const void* data, size_t size, void* wmem, void* amem) {
+  int n, h;
+  if (!nnue_file_shape(data, size, &n, &h)) return false;
+  if (!nnue_setup_random(n, h, 1, wmem, amem)) return false;  // shape, pointers
+  const u8* p = static_cast<const u8*>(data) + 16;
+  size_t bytes = nnue_weight_bytes(n, h);
+  memcpy(wmem, p, bytes);  // same layout as in memory
+  out_b = int32_t(read_u32(p + bytes));
+  memset(acc_key, 0, sizeof acc_key);
   return true;
 }
 
