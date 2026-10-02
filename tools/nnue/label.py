@@ -74,6 +74,13 @@ def board_piece(fen, square):
 
 
 def worker():
+    try:
+        work()
+    except Exception as e:  # report it; the other workers carry on with the queue
+        print(f"worker stopped: {e!r}", file=sys.stderr, flush=True)
+
+
+def work():
     p = subprocess.Popen([a.engine], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, text=True, bufsize=1)
 
@@ -117,8 +124,11 @@ def worker():
             m = SCORE.search(line)
             if m:
                 score = m.groups()
-        best = lines[-1].split()[1]
-        quiet = (len(best) == 4 and not board_piece(fen, best[2:4])
+        parts = lines[-1].split()
+        best = parts[1] if len(parts) > 1 else ""
+        legal = (len(best) >= 4 and "a" <= best[0] <= "h" and "1" <= best[1] <= "8"
+                 and "a" <= best[2] <= "h" and "1" <= best[3] <= "8")  # not "0000" / "(none)"
+        quiet = (legal and len(best) == 4 and not board_piece(fen, best[2:4])
                  and not (board_piece(fen, best[:2]) in "Pp" and best[0] != best[2]))
         if score and score[0] == "cp" and quiet:
             done.put(f"{fen};{result};{score[1]}")

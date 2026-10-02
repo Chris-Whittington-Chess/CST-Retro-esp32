@@ -27,6 +27,7 @@
 #include "../engine/board.h"
 #include "../engine/book.h"
 #include "../engine/eval.h"
+#include "../engine/nnue.h"
 #include "../engine/search.h"
 #include "../engine/tt.h"
 #include "../engine/uci_util.h"
@@ -34,12 +35,15 @@
 
 extern const uint8_t book_start[] asm("_binary_data_Jeroen_bin_start");
 extern const uint8_t book_end[] asm("_binary_data_Jeroen_bin_end");
+// The trained NNUE (tools/nnue/train.py), copied to internal SRAM at boot.
+extern const uint8_t net_start[] asm("_binary_data_net_bin_start");
+extern const uint8_t net_end[] asm("_binary_data_net_bin_end");
 
 // ---------------------------------------------------------------- layout
 
 enum { SQ = 30, PANEL_X = 240, PANEL_W = 80, SCREEN_W = 320, SCREEN_H = 240 };
 enum { CLOCK_H = 34, TOP_CLOCK_Y = 2, BOTTOM_CLOCK_Y = 156, BUTTON_Y = 196, BUTTON_H = 42 };
-enum { TT_BYTES = 128 * 1024 };
+enum { TT_BYTES = 64 * 1024 };  // leaves internal SRAM for the NNUE
 
 struct RGB {
   uint8_t r, g, b;
@@ -102,6 +106,9 @@ static bool last_from_book;
 static u32 book_move_at;  // a book move is shown after a short pause
 static bool uci_own_book;  // UCI option OwnBook (off: GUIs/matches bring their own)
 static bool touch_log;
+static bool nnue_ok;        // net loaded at boot
+static bool use_nnue;       // menu / UCI choice (saved in NVS from the menu)
+static EvalMode last_mode = EVAL_PESTO;
 
 // ---------------------------------------------------------------- engine task
 
@@ -140,7 +147,6 @@ static void flush_info() {
 }
 
 static void engine_loop(void*) {
-  search_init(&tt);
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     int c = eng_command;
@@ -183,6 +189,38 @@ static void stop_engine() {
   search_stop = false;
 }
 
+// The embedded net into 16-byte aligned internal SRAM (the SIMD kernels and
+// the per-move column reads need it there).
+static void load_net() {
+  int n, h;
+  size_t size = size_t(net_end - net_start);
+  if (!nnue_file_shape(net_start, size, &n, &h)) {
+    usb_println("net.bin is not a CSTN net: PeSTO only");
+    return;
+  }
+  void* w = heap_caps_aligned_alloc(16, nnue_weight_bytes(n, h), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  void* a = heap_caps_aligned_alloc(16, nnue_acc_bytes(n), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!w || !a) {
+    usb_println("no internal SRAM for the net: PeSTO only");
+    heap_caps_free(w);
+    heap_caps_free(a);
+    return;
+  }
+  nnue_ok = nnue_load(net_start, size, w, a);
+  usb_printf("NNUE 768->%d->1 %s\n", n, nnue_ok ? "loaded" : "failed");
+}
+
+// Set the evaluation before a search (only while the engine is idle); a
+// change clears the TT, whose entries hold the other evaluation's scores.
+static void apply_eval_mode() {
+  EvalMode m = (use_nnue && nnue_ok) ? EVAL_NNUE : EVAL_PESTO;
+  if (m != last_mode) {
+    eval_mode = m;
+    search_new_game();
+    last_mode = m;
+  }
+}
+
 static void start_engine() {
   phase = ENGINE;
   info_depth = 0;
@@ -197,6 +235,7 @@ static void start_engine() {
     }
   }
   last_from_book = false;
+  apply_eval_mode();
   memcpy(&eng_board, &game, sizeof game);
   const TimeControl& tc = TCS[tc_game];
   Limits lim;
@@ -488,7 +527,10 @@ static void draw_status() {
     snprintf(buf, sizeof buf, "%s %s", last_from_book ? "book" : "last", mv);
     line(DIM, buf);
   }
-  if (phase != UCI) line(DIM, TCS[tc_game].name);
+  if (phase != UCI) {
+    snprintf(buf, sizeof buf, "%s %s", TCS[tc_game].name, use_nnue && nnue_ok ? "NN" : "");
+    line(DIM, buf);
+  }
 }
 
 static void draw_panel() {
@@ -502,7 +544,7 @@ static void draw_panel() {
 }
 
 // Menu: a column of full-width buttons.
-enum { MENU_X = 20, MENU_W = 280, MENU_Y0 = 30, MENU_H = 30, MENU_GAP = 5, MENU_ITEMS = 6 };
+enum { MENU_X = 20, MENU_W = 280, MENU_Y0 = 30, MENU_H = 26, MENU_GAP = 4, MENU_ITEMS = 7 };
 
 static void menu_label(int i, char* out) {
   switch (i) {
@@ -514,7 +556,10 @@ static void menu_label(int i, char* out) {
       snprintf(out, 48, "Time: %s%s", TCS[tc_index].name, tc_index != tc_game ? " (next game)" : "");
       break;
     case 3: snprintf(out, 48, "Opening book: %s", use_book ? "on" : "off"); break;
-    case 4: snprintf(out, 48, "Flip board"); break;
+    case 4:
+      snprintf(out, 48, "Evaluation: %s", !nnue_ok ? "PeSTO (no net)" : use_nnue ? "NNUE" : "PeSTO");
+      break;
+    case 5: snprintf(out, 48, "Flip board"); break;
     default: snprintf(out, 48, "Close"); break;
   }
 }
@@ -578,7 +623,13 @@ static void tap_menu(int x, int y) {
       use_book = !use_book;
       prefs.putBool("book", use_book);
       break;
-    case 4: flipped = !flipped; menu_open = false; break;
+    case 4:
+      if (nnue_ok) {
+        use_nnue = !use_nnue;
+        prefs.putBool("nnue", use_nnue);
+      }
+      break;
+    case 5: flipped = !flipped; menu_open = false; break;
     default: menu_open = false; break;
   }
   dirty = true;
@@ -748,6 +799,7 @@ static void uci_go_cmd(const char* line) {
       return;
     }
   }
+  apply_eval_mode();
   memcpy(&eng_board, &game, sizeof game);
   eng_limits = uci_go(line, game.stm, 100);  // USB + bridge + screen ~50 ms per move
   eng_uci = true;
@@ -793,12 +845,16 @@ static void serial_line(char* line) {
     usb_println("id name CST Retro (ESP32)");
     usb_println("id author Chris Whittington");
     usb_println("option name OwnBook type check default false");
+    usb_println("option name Eval type combo default PeSTO var PeSTO var NNUE");
     uci_send("uciok");
   } else if (!strcmp(line, "isready")) {
     uci_send("readyok");
   } else if (!strcmp(line, "ucinewgame")) {
     stop_engine();
     search_new_game();
+  } else if (!strncmp(line, "setoption name Eval value ", 26)) {
+    use_nnue = nnue_ok && !strcmp(line + 26, "NNUE");
+    if (!strcmp(line + 26, "NNUE") && !nnue_ok) uci_send("info string no NNUE in this firmware");
   } else if (!strncmp(line, "setoption name OwnBook value ", 29)) {
     uci_own_book = !strcmp(line + 29, "true");
   } else if (!strncmp(line, "position ", 9)) {
@@ -863,18 +919,29 @@ void setup() {
   frame.setColorDepth(16);
   frame.createSprite(SCREEN_W, SCREEN_H);
 
-  void* mem = heap_caps_malloc(TT_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  tt.init(mem, TT_BYTES);
+  // Internal SRAM, biggest contiguous block first: the net (96 KB in one
+  // piece), then the TT (64 KB, or 32 KB if that no longer fits), then the
+  // engine task's stack. Without room for the net the board plays PeSTO.
+  load_net();
+  size_t tt_bytes = TT_BYTES;
+  void* mem = heap_caps_malloc(tt_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!mem) mem = heap_caps_malloc(tt_bytes /= 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  tt.init(mem, tt_bytes);
+  search_init(&tt);  // before anything (new_game) uses the TT - not in the engine task
   disableCore0WDT();  // the engine keeps core 0 busy while it thinks
-  xTaskCreatePinnedToCore(engine_loop, "engine", 32 * 1024, nullptr, 1, &eng_task, 0);
+  if (xTaskCreatePinnedToCore(engine_loop, "engine", 16 * 1024, nullptr, 1, &eng_task, 0) != pdPASS)
+    usb_println("engine task not created: out of internal SRAM");
+  usb_printf("TT %u KB\n", unsigned(tt_bytes >> 10));
 
   prefs.begin("cstretro", false);
   tc_index = prefs.getInt("tc", DEFAULT_TC);
   if (tc_index < 0 || tc_index >= NUM_TCS) tc_index = DEFAULT_TC;
   use_book = prefs.getBool("book", true);
+  use_nnue = nnue_ok && prefs.getBool("nnue", true);
   new_game(::WHITE);
-  usb_printf("CST Retro ready, internal free %u KB\n",
-                unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+  usb_printf("CST Retro ready, internal free %u KB (largest %u KB)\n",
+             unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
 }
 
 // Touch diagnostics on serial: every press and release with its raw
