@@ -45,7 +45,7 @@ then, with your board's image and port:
 esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.4-ws7.bin
 ```
 
-(The current images: `cst-retro-0.1.4-ws7.bin`, `cst-retro-0.1.2-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
+(The current images: `cst-retro-0.1.4-ws7.bin`, `cst-retro-0.1.4-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
 about 10 seconds; the board restarts into the game.
 
 ### From the browser
