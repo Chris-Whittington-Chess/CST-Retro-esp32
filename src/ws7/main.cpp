@@ -312,34 +312,31 @@ static PlyEval* ply_eval;
 static Board* san_board;   // scratch copy of the game for working out SAN
 static volatile int eng_score;  // the finished search's score, side to move's view
 
-// UCI info lines from the engine task, printed by loop() so that all serial
-// output comes from one task (single producer / single consumer ring).
-enum { INFO_SLOTS = 8, INFO_LEN = 400 };
-typedef char InfoLine[INFO_LEN];
-static InfoLine* info_ring = psram_new<InfoLine>(INFO_SLOTS);
-static volatile u32 info_head, info_tail;
+// UCI output during a search ("info" lines, then "bestmove") goes out from the
+// engine task itself, at once: through loop() it waited for the screen redraw
+// (~0.3 s on the 7-inch board), which cost moves in time trouble.
+enum { INFO_LEN = 400 };
 
 u32 engine_now_ms() { return millis(); }
 
 static void on_report(const SearchReport& r) {
   info_depth = r.depth;
   info_score = r.score;
-  if (eng_uci && info_head - info_tail < INFO_SLOTS) {
-    uci_info(r, info_ring[info_head % INFO_SLOTS], INFO_LEN);
-    info_head = info_head + 1;
-  }
-}
-
-static void flush_info() {
-  while (info_tail != info_head) {
-    usb_println(info_ring[info_tail % INFO_SLOTS]);
-    info_tail = info_tail + 1;
+  if (eng_uci) {
+    char line[INFO_LEN];
+    uci_info(r, line, INFO_LEN);
+    usb_println(line);
   }
 }
 
 static void engine_loop(void*) {
-  // Stack guard: nodes stop deepening 2 KB above the bottom of this stack.
-  search_stack_floor = (const char*)pxTaskGetStackStart(nullptr) + 2048;
+  // Stack guard: nodes stop deepening 4 KB above the bottom of this stack -
+  // room for the evaluation at the node where it fires (NNUE: ~1.9 KB)
+  // (STACK_GUARD_MARGIN: a test build sets it high to make the guard fire).
+#ifndef STACK_GUARD_MARGIN
+#define STACK_GUARD_MARGIN 4096
+#endif
+  search_stack_floor = (const char*)pxTaskGetStackStart(nullptr) + STACK_GUARD_MARGIN;
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     int c = eng_command;
@@ -347,6 +344,12 @@ static void engine_loop(void*) {
       SearchResult r = search(eng_board, eng_limits, on_report);
       eng_score = r.score;
       eng_move = r.best;
+      if (eng_uci) {  // answer the GUI now; loop() then updates the board
+        char line[24] = "bestmove 0000";
+        if (r.best) move_to_uci(r.best, line + 9);
+        snprintf(uci_last_bestmove, sizeof uci_last_bestmove, "%s", line + 9);
+        usb_println(line);
+      }
       eng_done = true;
     } else if (c == 'b') {
       u32 t0 = millis();
@@ -1211,15 +1214,10 @@ static void uci_go_cmd(const char* line) {
   dirty = true;
 }
 
-// The engine answered a UCI "go": report it and show the move on the board
-// (the GUI's next "position" replaces the board anyway).
+// The engine answered a UCI "go" (its task has sent the bestmove): show the
+// move on the board (the GUI's next "position" replaces the board anyway).
 static void uci_done() {
-  flush_info();
-  Move m = eng_move;
-  char mv[6] = "0000";
-  if (m) move_to_uci(m, mv);
-  uci_send("bestmove %s", mv);
-  snprintf(uci_last_bestmove, sizeof uci_last_bestmove, "%s", mv);
+  Move m = eng_move;  // already sent as bestmove by the engine task
   eng_uci = false;
   if (m && game.hply < MAX_GAME - MAX_PLY - 2) {
     record_eval(m, white_view(eng_score));
@@ -1337,7 +1335,7 @@ void setup() {
   Serial.begin(115200);  // input only; output goes through usb_out
   esp_log_level_set("*", ESP_LOG_NONE);  // nothing else may write to the UCI stream
   usb_out_begin();
-  if (!&game || !clock_hist || !info_ring) usb_println("PSRAM allocation failed");
+  if (!&game || !clock_hist) usb_println("PSRAM allocation failed");
   boot_note("start");
 
   // Internal SRAM, biggest contiguous blocks first: the engine task's stack
@@ -1431,7 +1429,6 @@ void loop() {
   if (touch.pressed) tap(touch.x, touch.y);
   if (touch.released) release_board(touch.x, touch.y);
 
-  flush_info();
   if (eng_done && phase == UCI) {
     eng_done = false;
     if (eng_uci) uci_done();

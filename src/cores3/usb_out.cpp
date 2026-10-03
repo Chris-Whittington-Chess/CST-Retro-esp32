@@ -24,7 +24,11 @@ static SemaphoreHandle_t lock_;  // several tasks may print
 static volatile uint32_t dropped_, longest_wait_ms_;  // diagnostics, see usb_out_stats()
 
 static void writer(void*) {
-  uint8_t chunk[64];
+  // At most 63 bytes a packet: a full 64-byte packet tells the PC's driver
+  // more is coming, and on Windows the data could then sit there until the
+  // next packet - output held for seconds (UCI stalls and time losses in a
+  // board gauntlet, while the board itself never waited).
+  uint8_t chunk[63];
   for (;;) {
     size_t n = xStreamBufferReceive(queue_, chunk, sizeof chunk, portMAX_DELAY);
     size_t done = 0;
@@ -54,9 +58,7 @@ void usb_out_begin() {
   xTaskCreatePinnedToCore(writer, "usb_out", 3072, nullptr, 2, nullptr, 1);
 }
 
-void usb_write(const void* data, size_t n) {
-  if (!queue_) return;
-  xSemaphoreTake(lock_, portMAX_DELAY);
+static void write_locked(const void* data, size_t n) {
   const uint8_t* p = static_cast<const uint8_t*>(data);
   while (n) {
     size_t k = xStreamBufferSend(queue_, p, n, pdMS_TO_TICKS(50));
@@ -67,6 +69,12 @@ void usb_write(const void* data, size_t n) {
     p += k;
     n -= k;
   }
+}
+
+void usb_write(const void* data, size_t n) {
+  if (!queue_) return;
+  xSemaphoreTake(lock_, portMAX_DELAY);
+  write_locked(data, n);
   xSemaphoreGive(lock_);
 }
 
@@ -77,9 +85,13 @@ void usb_out_stats(uint32_t* dropped, uint32_t* longest_wait_ms) {
 
 void usb_print(const char* s) { usb_write(s, strlen(s)); }
 
+// One locked write for the line and its ending: two tasks print UCI lines.
 void usb_println(const char* s) {
-  usb_print(s);
-  usb_write("\r\n", 2);
+  if (!queue_) return;
+  xSemaphoreTake(lock_, portMAX_DELAY);
+  write_locked(s, strlen(s));
+  write_locked("\r\n", 2);
+  xSemaphoreGive(lock_);
 }
 
 void usb_printf(const char* fmt, ...) {
