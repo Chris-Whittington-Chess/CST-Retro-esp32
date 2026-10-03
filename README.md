@@ -106,6 +106,9 @@ Strength (PC, 10+0.1, UHO_4060_v4 openings, SPRT elo0=0 elo1=5):
 | SEE (ordering, quiescence, pruning) vs none | +57.2 +/- 19.1, H1 | 230-121-317 (668) |
 | NNUE 768->64->1 v1 vs PeSTO (both with SEE) | +233.0 +/- 45.1, H1 | 198-37-40 (275) |
 
+The real 7-inch board, over USB at 1+0.6 against eight CCRL-rated engines
+(231 games, docs/ENGINE-POOL.md): **about 2170 CCRL 40/15 (95% 2129-2210)**.
+
 NNUE v1: 7.09M quiet positions from 164k CStal-5 match games, labelled by
 CStal-5 at depth 6 (tools/nnue). On the CoreS3 it costs ~20% nps (PIE SIMD)
 and the TT drops to 32 KB to make room for the 96 KB of weights.

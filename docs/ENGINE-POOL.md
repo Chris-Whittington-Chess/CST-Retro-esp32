@@ -80,3 +80,21 @@ the board would in that time.
 Round-robin 1: 2072 CCRL (95% 1979-2130), 66.7% over 60 games.
 Round-robin 2: 2197 (95% 2070-2293), 53.3% over 46 games vs the stronger pool.
 Both combined (clean games only, 78): **2152 CCRL (95% 2079-2223)**.
+
+## The real board
+
+`tools/pool/board_gauntlet.ps1`: the 7-inch board itself over USB
+(`tools/uci_bridge.py`), one game at a time at 1+0.6, against eight pool
+engines whose fitted ratings match CCRL (Goldfish, Gunborg, Halogen 3.0,
+Smallbrain 1.1, KhepriChess, Dumb, Prophet, Tantabus), cutechess
+adjudication on (resign at 10 pawns for 4 moves, both agreeing; draw from
+move 40). Rated jointly with the round-robins' clean games (`rate.py`).
+
+2026-10-03, 231 games (`match/board3`): **2170 CCRL (95% 2129-2210)**,
+50.4%; without its 3 failure games 2166. The emulation (2152) was right.
+
+Failures, all fixed since: two earlier runs ended in board stalls - an
+engine stack overflow (a long endgame search; reboot) - and the bridge
+failing to reopen the port; in board3, two time losses and one stall came
+from the board's output being held on the PC side (full 64-byte USB
+packets) and delayed behind the screen redraw.
