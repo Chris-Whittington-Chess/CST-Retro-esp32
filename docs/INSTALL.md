@@ -8,6 +8,7 @@ image. Pick your board below; if it isn't listed, see
 | Board | Screen | Firmware image | PlatformIO env |
 |---|---|---|---|
 | Waveshare ESP32-S3-Touch-LCD-7 | 7", 800x480, capacitive touch | `cst-retro-<version>-ws7.bin` | `ws7` |
+| Waveshare ESP32-S3-Touch-LCD-4 | 4", 480x480, capacitive touch | `cst-retro-<version>-ws4.bin` | `ws4` |
 | M5Stack CoreS3 | 2", 320x240, capacitive touch | `cst-retro-<version>-cores3.bin` | `cores3` |
 
 The images are in [`dist/`](../dist). Each is the whole flash contents
@@ -22,6 +23,7 @@ settings (time control, book, evaluation, your clock) to their defaults.
   **BOOT** while plugging back in, release it, flash, then unplug and plug in
   again (without BOOT) to start the game. Once CST Retro is on the board,
   later updates need no buttons.
+- **Waveshare 4"**: USB-C; the port appears straight away, no buttons needed.
 - **M5Stack CoreS3**: USB-C. If the port doesn't appear or flashing fails,
   hold the reset button for about 3 seconds (the green LED lights) to enter
   download mode.
@@ -45,7 +47,8 @@ then, with your board's image and port:
 esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.4-ws7.bin
 ```
 
-(The current images: `cst-retro-0.1.4-ws7.bin`, `cst-retro-0.1.4-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
+(The current images: `cst-retro-0.1.4-ws7.bin`, `cst-retro-0.1.5-ws4.bin`,
+`cst-retro-0.1.4-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
 about 10 seconds; the board restarts into the game.
 
 ### From the browser
@@ -64,7 +67,7 @@ command line), in a clone of this repo:
 pio run -e ws7 -t upload --upload-port COM5
 ```
 
-Use `-e cores3` for the CoreS3. Both use the pioarduino platform
+Use `-e ws4` for the 4-inch board and `-e cores3` for the CoreS3. All use the pioarduino platform
 (arduino-esp32 3.x), downloaded on the first build. On Windows build from
 PowerShell or cmd, not Git Bash/MSYS (ESP-IDF's tool installer refuses to
 run there).
@@ -97,5 +100,6 @@ pieces at the board's square size (`tools/make_pieces_burnett.py <px>
 and UCI code are shared and need no changes.
 
 Boards that should port easily: Waveshare ESP32-S3-Touch-LCD-4.3 / -5
-(same panel family and GT911 touch as the 7"). An ESP32-P4 board would be
+(same panel family and GT911 touch as the 7"; `src/ws4/main.cpp` shows a
+port with a different panel controller, expander and a square layout). An ESP32-P4 board would be
 faster still but needs its own SIMD work.
