@@ -1,0 +1,16 @@
+{
+  "name": "CST Retro - 4.0 inch ESP32-32E display, E32R40T (320x480)",
+  "version": "0.1.5",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "cst-retro-0.1.5-e32r40t.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

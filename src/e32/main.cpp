@@ -129,8 +129,7 @@ class LGFX : public lgfx::LGFX_Device {
 static LGFX lcd;
 static LGFX_Sprite sqs(&lcd);  // one board square, rendered then pushed
 
-// Portrait, USB socket at the bottom. (Touch calibration data is independent
-// of the rotation.)
+// Portrait, USB socket at the bottom.
 enum { ROTATION = 0 };
 
 struct TouchState {
@@ -1347,20 +1346,13 @@ void setup() {
   tc_index = prefs.getInt("tc", DEFAULT_TC);
   if (tc_index < 0 || tc_index >= NUM_TCS) tc_index = DEFAULT_TC;
   ply_eval = static_cast<PlyEval*>(calloc(MAX_GAME, sizeof(PlyEval)));
-  // Touch calibration: ours, else the one Retro Backgammon left on this board
-  // (same panel, and the data does not depend on the rotation), else ask.
+  // Touch calibration: ours from NVS, else ask (the first start). Retro
+  // Backgammon's calibration of the same board is not reused: made in
+  // landscape, it was a square out towards the edges here.
   {
     uint16_t cal[8];
-    Preferences bg;
-    if (prefs.getBytes("cal", cal, sizeof cal) == sizeof cal) {
-      lcd.setTouchCalibrate(cal);
-    } else if (bg.begin("bg", true) && bg.getBytes("cal", cal, sizeof cal) == sizeof cal) {
-      lcd.setTouchCalibrate(cal);
-      prefs.putBytes("cal", cal, sizeof cal);
-    } else {
-      calibrate();
-    }
-    bg.end();
+    if (prefs.getBytes("cal", cal, sizeof cal) == sizeof cal) lcd.setTouchCalibrate(cal);
+    else calibrate();
   }
   use_book = prefs.getBool("book", true);
   human_clock = prefs.getBool("hclock", true);

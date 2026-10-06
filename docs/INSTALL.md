@@ -9,6 +9,7 @@ image. Pick your board below; if it isn't listed, see
 |---|---|---|---|
 | Waveshare ESP32-S3-Touch-LCD-7 | 7", 800x480, capacitive touch | `cst-retro-<version>-ws7.bin` | `ws7` |
 | Waveshare ESP32-S3-Touch-LCD-4 | 4", 480x480, capacitive touch | `cst-retro-<version>-ws4.bin` | `ws4` |
+| 4.0" ESP32-32E display (E32R40T, sold as Hosyond) | 4", 320x480, resistive touch; classic ESP32 | `cst-retro-<version>-e32r40t.bin` | `e32r40t` |
 | M5Stack CoreS3 | 2", 320x240, capacitive touch | `cst-retro-<version>-cores3.bin` | `cores3` |
 
 The images are in [`dist/`](../dist). Each is the whole flash contents
@@ -24,6 +25,11 @@ settings (time control, book, evaluation, your clock) to their defaults.
   again (without BOOT) to start the game. Once CST Retro is on the board,
   later updates need no buttons.
 - **Waveshare 4"**: USB-C; the port appears straight away, no buttons needed.
+- **4.0" ESP32-32E (E32R40T)**: USB-C through a CH340 serial chip; on Windows install the CH340
+  driver if no port appears. It is a classic ESP32: use `--chip esp32` with esptool. The first
+  start asks you to tap four corner arrows to calibrate the touch screen (again from the menu,
+  "Calibrate touch"). The slowest board: no PSRAM and no vector instructions, so the engine
+  searches about 15,000 positions a second instead of 55,000.
 - **M5Stack CoreS3**: USB-C. If the port doesn't appear or flashing fails,
   hold the reset button for about 3 seconds (the green LED lights) to enter
   download mode.
@@ -48,7 +54,7 @@ esptool --chip esp32s3 --port COM5 write-flash 0x0 cst-retro-0.1.4-ws7.bin
 ```
 
 (The current images: `cst-retro-0.1.4-ws7.bin`, `cst-retro-0.1.5-ws4.bin`,
-`cst-retro-0.1.4-cores3.bin`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
+`cst-retro-0.1.4-cores3.bin`, `cst-retro-0.1.5-e32r40t.bin` - that one with `--chip esp32`. Older esptool versions spell it `esptool.py ... write_flash`.) It takes
 about 10 seconds; the board restarts into the game.
 
 ### From the browser
@@ -67,7 +73,8 @@ command line), in a clone of this repo:
 pio run -e ws7 -t upload --upload-port COM5
 ```
 
-Use `-e ws4` for the 4-inch board and `-e cores3` for the CoreS3. All use the pioarduino platform
+Use `-e ws4` for the 4-inch Waveshare, `-e e32r40t` for the ESP32-32E display and `-e cores3`
+for the CoreS3. All use the pioarduino platform
 (arduino-esp32 3.x), downloaded on the first build. On Windows build from
 PowerShell or cmd, not Git Bash/MSYS (ESP-IDF's tool installer refuses to
 run there).
@@ -83,12 +90,15 @@ serial command `info` reports memory and whether the NNUE loaded.
 There is no single image for every display: each board needs its own small
 port - display output, touch input and a screen layout. What a port needs:
 
-- **ESP32-S3 with PSRAM** (8 MB is plenty; octal or quad) for the screen
+- **Best: an ESP32-S3 with PSRAM** (8 MB is plenty; octal or quad) for the screen
   canvas, and about 200 KB of free internal SRAM for the NNUE (96 KB in one
-  block), the hash table and the engine. An ESP32-S3 is required for the
-  SIMD NNUE kernels; a plain ESP32 could run the PeSTO evaluation only.
-- **8 MB flash or more** (the program, book and net are about 1.4 MB; the
-  boards here use 16 MB partitions).
+  block), the hash table and the engine. The S3 also has the vector
+  instructions the fast NNUE code uses.
+- **A classic ESP32 without PSRAM also works**, more slowly: `src/e32/main.cpp`
+  draws straight to the panel with no canvas, reads the net's weights from
+  flash and keeps everything else in 156 KB of RAM.
+- **4 MB flash or more** (the program, book and net are about 1.4 MB: on
+  4 MB use one big app partition, as the `e32r40t` env does).
 - **Touch**: capacitive is best; the board's squares need to be at least
   about 30 px.
 
