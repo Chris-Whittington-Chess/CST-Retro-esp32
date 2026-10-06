@@ -115,6 +115,7 @@ Strength (PC, 10+0.1, UHO_4060_v4 openings, SPRT elo0=0 elo1=5):
 
 The real 7-inch board, over USB at 1+0.6 against eight CCRL-rated engines
 (231 games, docs/ENGINE-POOL.md): **about 2170 CCRL 40/15 (95% 2129-2210)**.
+The classic-ESP32 board (E32R40T), the same way over 208 games: **about 2015 (95% 1954-2060)**.
 
 NNUE v1: 7.09M quiet positions from 164k CStal-5 match games, labelled by
 CStal-5 at depth 6 (tools/nnue). On the CoreS3 it costs ~20% nps (PIE SIMD)

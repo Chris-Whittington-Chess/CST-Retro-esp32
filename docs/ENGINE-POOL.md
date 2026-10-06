@@ -98,3 +98,14 @@ engine stack overflow (a long endgame search; reboot) - and the bridge
 failing to reopen the port; in board3, two time losses and one stall came
 from the board's output being held on the PC side (full 64-byte USB
 packets) and delayed behind the screen redraw.
+
+### The classic ESP32 board (E32R40T)
+
+2026-10-06, 208 games (`match/e32board1`; `board_gauntlet.ps1 -port COM8
+-baud 921600 -set low`: Maxwell in place of Prophet): **2014 CCRL (95%
+1954-2060)**, 36.1% - about 155 Elo below the ESP32-S3 boards, for a quarter
+of the speed (NNUE in plain C++, weights read from flash: ~18 knps in play)
+and a 64 KB TT. No failures: every game ended by mate, a draw rule or
+cutechess adjudication. Scores: Maxwell 15/26, Goldfish 14.5, Dumb 11,
+Halogen 3.0 10, Gunborg 8.5, KhepriChess 6.5, Smallbrain 1.1 6, Tantabus 3.5.
+(Two training jobs shared the PC, ~40% CPU.)
