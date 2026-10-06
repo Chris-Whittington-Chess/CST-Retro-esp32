@@ -2,7 +2,7 @@
 ordinary UCI engine (they launch engines as programs and talk on stdin/stdout;
 this relays that to the board's serial port).
 
-  python tools/uci_bridge.py [--port COM3]      (needs pyserial)
+  python tools/uci_bridge.py [--port COM3] [--baud 921600]      (needs pyserial)
   tools/cstretro-usb.bat                        (same, for GUIs that want a file)
 
 cutechess-cli example:
@@ -24,13 +24,14 @@ UCI_REPLIES = ("id ", "uciok", "readyok", "bestmove", "info", "option ", "copypr
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", default="COM3")
+ap.add_argument("--baud", type=int, default=115200, help="921600 for the E32R40T (CH340 UART)")
 ap.add_argument("--log", help="append the whole conversation to this file")
 a = ap.parse_args()
 
 log = open(a.log, "a", encoding="utf-8") if a.log else None
 lock = threading.Lock()
 s = serial.Serial()
-s.port, s.baudrate, s.timeout = a.port, 115200, 0.005  # short: replies pass straight through
+s.port, s.baudrate, s.timeout = a.port, a.baud, 0.005  # short: replies pass straight through
 s.dtr = s.rts = False
 # Retry the open for a while: cutechess quits the previous bridge and starts
 # this one at once, and Windows may not have released the port yet ("access

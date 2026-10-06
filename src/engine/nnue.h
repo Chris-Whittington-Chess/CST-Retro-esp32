@@ -44,6 +44,9 @@ bool nnue_setup_random(int n, int h, u32 seed, void* wmem, void* amem);
 // weights into wmem (nnue_weight_bytes(N, H), 16-byte aligned).
 bool nnue_file_shape(const void* data, size_t size, int* n, int* h);
 bool nnue_load(const void* data, size_t size, void* wmem, void* amem);
+// As nnue_load, but the weights are used where the file is (e.g. in flash:
+// no RAM for a copy); amem holds the accumulators. Plain C++ evaluation only.
+bool nnue_load_in_place(const void* data, size_t size, void* amem);
 bool nnue_ready();
 int nnue_width();
 int nnue_hidden();

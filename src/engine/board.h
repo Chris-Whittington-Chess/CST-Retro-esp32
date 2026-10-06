@@ -46,7 +46,12 @@ inline Move make_move(int from, int to, u32 flags = 0, int promo = 0) {
   return u32(from) | u32(to) << 8 | u32(promo) << 16 | flags;
 }
 
-enum { MAX_MOVES = 256, MAX_GAME = 1024 };
+// CST_MAX_GAME: the game history in plies (each Board carries it). 1024 by
+// default; boards without PSRAM build with fewer.
+#ifndef CST_MAX_GAME
+#define CST_MAX_GAME 1024
+#endif
+enum { MAX_MOVES = 256, MAX_GAME = CST_MAX_GAME };
 
 // PeSTO piece-square values packed as (eg << 16) + mg per piece code and 0x88
 // square, kept incrementally in Board::psq (tables live in eval.cpp).

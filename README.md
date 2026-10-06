@@ -39,6 +39,10 @@ source, and what a port to another screen involves.
 - `ws4` - the game on the Waveshare ESP32-S3-Touch-LCD-4 (480x480 RGB panel with an ST7701,
   GT911 touch, 8 MB PSRAM, 16 MB flash, CH32V003 I/O expander with a buzzer). Square screen:
   400x400 board, clocks in a column on the right, move list and buttons in a strip below.
+- `e32r40t` - the game on the 4.0" ESP32-32E display (lcdwiki E32R40T): a classic ESP32 with no
+  PSRAM and 4 MB flash, ST7796 320x480 SPI panel, resistive touch, CH340 serial at 921600 baud.
+  No frame buffer (squares are drawn one by one), the NNUE in plain C++ with its weights read
+  from flash (156 KB of RAM in all): about 15 knps, a 64 KB TT.
 - `cores3` - the game on the M5Stack CoreS3 (ESP32-S3, 240 MHz, 8 MB quad PSRAM, 320x240 touch),
   COM3. Also arduino-esp32 3.x; its quad-PSRAM build starts PSRAM only before setup().
 - `cores3-bench` / `cores3-prof` - engine benchmarks (perft, search bench, cycle counters).

@@ -2,14 +2,15 @@
 don't build from source.
 
 Usage (after building the boards' game envs), with PlatformIO's Python:
-    %USERPROFILE%\\.platformio\\penv\\Scripts\\python.exe tools/merge_firmware.py 0.1.0 [ws7 ws4 cores3]
+    %USERPROFILE%\\.platformio\\penv\\Scripts\\python.exe tools/merge_firmware.py 0.1.0 [ws7 ws4 cores3 e32r40t]
 
 Writes dist/cst-retro-<version>-<board>.bin (bootloader, partition table,
 boot_app0 and the app in one file) and dist/manifest-<board>.json for a
 browser installer (ESP Web Tools). Flash with:
     esptool --chip esp32s3 write-flash 0x0 dist/cst-retro-<version>-<board>.bin
+(--chip esp32 for the e32r40t).
 
-Both boards build on arduino-esp32 3.x (pioarduino), which makes the merged
+All boards build on arduino-esp32 3.x (pioarduino), which makes the merged
 image itself (firmware.factory.bin); this copies it under a release name and
 writes the manifest.
 """
@@ -22,7 +23,9 @@ BOARDS = {  # env -> what the user sees
     "ws7": "Waveshare ESP32-S3-Touch-LCD-7 (7 inch, 800x480)",
     "ws4": "Waveshare ESP32-S3-Touch-LCD-4 (4 inch, 480x480)",
     "cores3": "M5Stack CoreS3 (2 inch, 320x240)",
+    "e32r40t": "4.0 inch ESP32-32E display, E32R40T (320x480)",
 }
+CHIP = {"e32r40t": "ESP32"}  # the rest are ESP32-S3
 
 if len(sys.argv) < 2:
     sys.exit(__doc__)
@@ -47,7 +50,7 @@ for board in boards:
         "name": f"CST Retro - {BOARDS[board]}",
         "version": version,
         "new_install_prompt_erase": True,
-        "builds": [{"chipFamily": "ESP32-S3", "parts": [{"path": out.name, "offset": 0}]}],
+        "builds": [{"chipFamily": CHIP.get(board, "ESP32-S3"), "parts": [{"path": out.name, "offset": 0}]}],
     }
     (DIST / f"manifest-{board}.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"{out}  ({out.stat().st_size:,} bytes)")

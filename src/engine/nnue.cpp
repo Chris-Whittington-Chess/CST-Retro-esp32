@@ -261,6 +261,35 @@ bool nnue_file_shape(const void* data, size_t size, int* n, int* h) {
   return true;
 }
 
+// The weights stay where the file is (flash, on a machine with no RAM for a
+// copy); only the accumulators need memory. The file's weights are laid out
+// as in memory. No SIMD path: nothing guarantees 16-byte alignment.
+bool nnue_load_in_place(const void* data, size_t size, void* amem) {
+  int n, h;
+  if (!nnue_file_shape(data, size, &n, &h) || !amem) return false;
+  const u8* p = static_cast<const u8*>(data) + 16;
+  if (uintptr_t(p) & 1) return false;  // int16 weights
+  N = n;
+  H = h;
+  ft_w = const_cast<int16_t*>(reinterpret_cast<const int16_t*>(p));  // read only from here on
+  ft_b = ft_w + size_t(NNUE_INPUTS) * n;
+  int16_t* q = ft_b + n;
+  if (h) {
+    l1_w = q;
+    l1_b = reinterpret_cast<int32_t*>(l1_w + size_t(h) * 2 * n);
+    out_w = reinterpret_cast<int16_t*>(l1_b + h);
+  } else {
+    l1_w = nullptr;
+    l1_b = nullptr;
+    out_w = q;
+  }
+  acc = static_cast<int16_t*>(amem);
+  out_b = int32_t(read_u32(p + nnue_weight_bytes(n, h)));
+  memset(acc_key, 0, sizeof acc_key);
+  root_hply = 0;
+  return true;
+}
+
 bool nnue_load(const void* data, size_t size, void* wmem, void* amem) {
   int n, h;
   if (!nnue_file_shape(data, size, &n, &h)) return false;
