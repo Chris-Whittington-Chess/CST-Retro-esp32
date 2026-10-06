@@ -2,7 +2,7 @@
 don't build from source.
 
 Usage (after building the boards' game envs), with PlatformIO's Python:
-    %USERPROFILE%\\.platformio\\penv\\Scripts\\python.exe tools/merge_firmware.py 0.1.0 [ws7 cores3]
+    %USERPROFILE%\\.platformio\\penv\\Scripts\\python.exe tools/merge_firmware.py 0.1.0 [ws7 ws4 cores3]
 
 Writes dist/cst-retro-<version>-<board>.bin (bootloader, partition table,
 boot_app0 and the app in one file) and dist/manifest-<board>.json for a
@@ -20,6 +20,7 @@ from pathlib import Path
 
 BOARDS = {  # env -> what the user sees
     "ws7": "Waveshare ESP32-S3-Touch-LCD-7 (7 inch, 800x480)",
+    "ws4": "Waveshare ESP32-S3-Touch-LCD-4 (4 inch, 480x480)",
     "cores3": "M5Stack CoreS3 (2 inch, 320x240)",
 }
 

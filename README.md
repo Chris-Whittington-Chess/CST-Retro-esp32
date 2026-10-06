@@ -36,6 +36,9 @@ source, and what a port to another screen involves.
 - `ws7` - the game on the Waveshare ESP32-S3-Touch-LCD-7 (ESP32-S3, 8 MB OPI PSRAM, 16 MB
   flash, 800x480 RGB panel, GT911 touch), flashed through its USB socket. Built on
   arduino-esp32 3.x (pioarduino) for the RGB driver's bounce buffers.
+- `ws4` - the game on the Waveshare ESP32-S3-Touch-LCD-4 (480x480 RGB panel with an ST7701,
+  GT911 touch, 8 MB PSRAM, 16 MB flash, CH32V003 I/O expander with a buzzer). Square screen:
+  400x400 board, clocks in a column on the right, move list and buttons in a strip below.
 - `cores3` - the game on the M5Stack CoreS3 (ESP32-S3, 240 MHz, 8 MB quad PSRAM, 320x240 touch),
   COM3. Also arduino-esp32 3.x; its quad-PSRAM build starts PSRAM only before setup().
 - `cores3-bench` / `cores3-prof` - engine benchmarks (perft, search bench, cycle counters).
